@@ -440,7 +440,7 @@ def menu(title, options):
                 return options[idx][0]
         except (ValueError, IndexError):
             pass
-        print("  ✗ Pilihan tidak valid!")
+        print(f"  {C['RE']}✗ Pilihan tidak valid!{C['R']}")
 
 def input_with_default(prompt, default=""):
     if default:
@@ -477,7 +477,7 @@ def do_login(config):
     nip = config.get("nip")
     password = config.get("password")
     if not nip or not password:
-        print("  ✗ Konfigurasi belum di-setup. Jalankan setup dulu.")
+        print(f"  {C['RE']}✗ Konfigurasi belum di-setup. Jalankan setup dulu.{C['R']}")
         return None, None, None
     
     try:
@@ -512,7 +512,7 @@ def do_login(config):
         
         return token, user, gi_id
     except Exception as e:
-        print(f"  ✗ Login gagal: {e}")
+        print(f"  {C['RE']}✗ Login gagal: {e}{C['R']}")
         return None, None, None
 
 def show_data(token, data_type, gi_id, date_str):
@@ -522,11 +522,11 @@ def show_data(token, data_type, gi_id, date_str):
     items = result["data"].get("items", [])
     
     if not items:
-        print(f"  Tidak ada data untuk {date_str}")
+        print(f"  {C['Y']}Tidak ada data untuk {date_str}{C['R']}")
         return
     
     clear()
-    header(f"{ep['label']} - {date_str}")
+    header(f"📊 {ep['label']} · {date_str}")
     print()
     
     for item in items:
@@ -564,7 +564,7 @@ def show_data(token, data_type, gi_id, date_str):
             print(f"       Kosong: {empty}")
     
     print()
-    input("  Tekan Enter untuk kembali...")
+    input(f"  {C['D']}[Enter untuk kembali...]{C['R']}")
 
 def input_single(token, data_type, gi_id, date_str, user_info):
     """Input data untuk satu target spesifik."""
@@ -576,11 +576,11 @@ def input_single(token, data_type, gi_id, date_str, user_info):
     
     if not items:
         print(f"  Tidak ada item untuk {date_str}")
-        input("  Tekan Enter...")
+        input(f"  {C['D']}[Enter]{C['R']}")
         return
     
     clear()
-    header(f"INPUT {ep['label']}")
+    header(f"✏  INPUT {ep['label']}")
     print()
     
     # Tampilkan daftar item
@@ -603,12 +603,12 @@ def input_single(token, data_type, gi_id, date_str, user_info):
     try:
         idx = int(input("  Pilih nomor item: ").strip()) - 1
         if idx < 0 or idx >= len(items):
-            print("  ✗ Tidak valid!")
-            input("  Tekan Enter...")
+            print(f"  {C['RE']}✗ Pilihan tidak valid!{C['R']}")
+            input(f"  {C['D']}[Enter]{C['R']}")
             return
     except ValueError:
-        print("  ✗ Tidak valid!")
-        input("  Tekan Enter...")
+        print(f"  {C['RE']}✗ Pilihan tidak valid!{C['R']}")
+        input(f"  {C['D']}[Enter]{C['R']}")
         return
     
     item = items[idx]
@@ -619,7 +619,7 @@ def input_single(token, data_type, gi_id, date_str, user_info):
     if item.get('statusCB') == 'OFF':
         print(f"\n  ⛔ {nama} CB OFF — tidak bisa input beban!")
         print("  (Circuit Breaker mati, tidak ada arus)")
-        input("  Tekan Enter...")
+        input(f"  {C['D']}[Enter]{C['R']}")
         return
     
     data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
@@ -646,7 +646,7 @@ def input_single(token, data_type, gi_id, date_str, user_info):
     
     if not empty_periods:
         print(f"\n  ✓ Semua periode sudah terisi (24/24)!")
-        input("  Tekan Enter...")
+        input(f"  {C['D']}[Enter]{C['R']}")
         return
     
     print(f"\n  Periode kosong: {empty_periods}")
@@ -655,12 +655,12 @@ def input_single(token, data_type, gi_id, date_str, user_info):
     try:
         per = int(input("  Periode yang akan diisi: ").strip())
         if per not in empty_periods and per not in range(24):
-            print("  ✗ Periode tidak valid!")
-            input("  Tekan Enter...")
+            print(f"  {C['RE']}✗ Periode tidak valid!{C['R']}")
+            input(f"  {C['D']}[Enter]{C['R']}")
             return
     except ValueError:
-        print("  ✗ Tidak valid!")
-        input("  Tekan Enter...")
+        print(f"  {C['RE']}✗ Periode tidak valid!{C['R']}")
+        input(f"  {C['D']}[Enter]{C['R']}")
         return
     
     # Input nilai dengan saran SMART (weekday/weekend, 14h history, kelipatan 5)
@@ -722,8 +722,8 @@ def input_single(token, data_type, gi_id, date_str, user_info):
         extra_values = {}
     
     if not confirm(f"\n  Input {nama} periode {per}: {value}{ep['unit']}?"):
-        print("  Dibatalkan.")
-        input("  Tekan Enter...")
+        print(f"  {C['Y']}⊘ Dibatalkan.{C['R']}")
+        input(f"  {C['D']}[Enter]{C['R']}")
         return
     
     # Build data
@@ -750,15 +750,15 @@ def input_single(token, data_type, gi_id, date_str, user_info):
     status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
     
     if result.get("success"):
-        print(f"  ✓ BERHASIL! ID: {result['data'].get('id')}")
+        print(f"  {C['G']}✓ BERHASIL! ID: {result['data'].get('id')}{C['R']}")
     else:
         msg = result.get("message", str(result))
         if isinstance(msg, list):
             msg = ", ".join(msg)
-        print(f"  ✗ Gagal ({status}): {msg}")
+        print(f"  {C['RE']}✗ Gagal ({status}): {msg}{C['R']}")
     
     print()
-    input("  Tekan Enter untuk kembali...")
+    input(f"  {C['D']}[Enter untuk kembali...]{C['R']}")
 
 def offer_portal_sync(data_type, periodes, date_str):
     """Tanya operator apakah mau sync ke Portal PLN setelah batch fill sukses.
@@ -791,7 +791,7 @@ def offer_portal_sync(data_type, periodes, date_str):
         return
     
     if not superi_sync.PORTAL_USER or not superi_sync.PORTAL_PASS:
-        print("  ✗ Credentials Portal PLN belum diset di .superi_config.json")
+        print(f"  {C['RE']}✗ Credentials Portal PLN belum diset di .superi_config.json{C['R']}")
         print("    Tambahkan: portal_user, portal_password")
         return
     
@@ -819,7 +819,7 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
     items = result["data"].get("items", [])
     
     clear()
-    header(f"BATCH FILL {ep['label']}")
+    header(f"⚡ BATCH FILL · {ep['label']}")
     print()
     
     for i, item in enumerate(items, 1):
@@ -844,7 +844,7 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
     # Tolak CB OFF
     if item.get('statusCB') == 'OFF':
         print(f"\n  ⛔ {item['nama']} CB OFF — tidak bisa input beban!")
-        input("  Tekan Enter...")
+        input(f"  {C['D']}[Enter]{C['R']}")
         return
     
     data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
@@ -854,7 +854,7 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
     
     if not empty_periods:
         print(f"\n  ✓ {item['nama']} sudah 24/24!")
-        input("  Tekan Enter...")
+        input(f"  {C['D']}[Enter]{C['R']}")
         return
     
     # Hitung nilai dari periode terisi tertinggi (suggest value)
@@ -912,8 +912,8 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
         # Filter valid
         valid_periods = [p for p in empty_periods if teg_suggestions[p][0] is not None]
         if not valid_periods:
-            print("  ✗ Tidak ada nilai valid!")
-            input("  Tekan Enter...")
+            print(f"  {C['RE']}✗ Tidak ada nilai valid!{C['R']}")
+            input(f"  {C['D']}[Enter]{C['R']}")
             return
         
         if not confirm(f"\n  Isi {len(valid_periods)} periode tegangan {item['nama']}?"):
@@ -950,7 +950,7 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
         if success > 0:
             offer_portal_sync(data_type, valid_periods, date_str)
         
-        input("  Tekan Enter...")
+        input(f"  {C['D']}[Enter]{C['R']}")
         return
     else:
         # Beban: SMART SUGGEST untuk satu nilai yang dipakai di semua periode kosong
@@ -1007,7 +1007,7 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
     if success > 0:
         offer_portal_sync(data_type, empty_periods, date_str)
     
-    input("  Tekan Enter...")
+    input(f"  {C['D']}[Enter]{C['R']}")
 
 # ============================================================
 # MAIN MENU
@@ -1021,14 +1021,14 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     
     ep = ENDPOINTS[data_type]
     clear()
-    header(f"⚡ Batch Fill per Jam — {ep['label']}")
+    header(f"⚡ BATCH per JAM · {ep['label']}")
     
     # Fetch data hari ini
     result = api_get(token, ep["list"], {"garduIndukId": gi_id, "date": date_str})
     items = result.get("data", {}).get("items", [])
     if not items:
         print("  Tidak ada data.")
-        input("  Tekan Enter...")
+        input(f"  {C['D']}[Enter]{C['R']}")
         return
     
     # Hitung item kosong per periode
@@ -1059,15 +1059,15 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     
     if not has_empty:
         print("\n  ✓ Semua periode sudah penuh!")
-        input("  Tekan Enter...")
+        input(f"  {C['D']}[Enter]{C['R']}")
         return
     
     # Pilih periode
     try:
         per = int(input("\n  Pilih periode (jam): ").strip())
         if per < 0 or per > 23:
-            print("  ✗ Periode harus 0-23!")
-            input("  Tekan Enter...")
+            print(f"  {C['RE']}✗ Periode harus 0-23!{C['R']}")
+            input(f"  {C['D']}[Enter]{C['R']}")
             return
     except ValueError:
         return
@@ -1075,7 +1075,7 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     empty_items = empty_by_periode[per]
     if not empty_items:
         print(f"\n  ✓ Periode P{per:02d} sudah penuh!")
-        input("  Tekan Enter...")
+        input(f"  {C['D']}[Enter]{C['R']}")
         return
     
     print(f"\n  ⚡ Periode P{per:02d}:00 — {len(empty_items)} item kosong")
@@ -1156,13 +1156,13 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
             valid_items.append(it)
     
     if not valid_items:
-        print("  ✗ Tidak ada item dengan nilai valid!")
-        input("  Tekan Enter...")
+        print(f"  {C['RE']}✗ Tidak ada item dengan nilai valid!{C['R']}")
+        input(f"  {C['D']}[Enter]{C['R']}")
         return
     
     if not confirm(f"\n  Input {len(valid_items)} item di periode P{per:02d}?"):
-        print("  Dibatalkan.")
-        input("  Tekan Enter...")
+        print(f"  {C['Y']}⊘ Dibatalkan.{C['R']}")
+        input(f"  {C['D']}[Enter]{C['R']}")
         return
     
     # Submit semua
@@ -1206,14 +1206,14 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
             fail += 1
             print(f"    ✗ {it['nama']}: {e}")
     
-    print(f"\n  ═══════════════════════════════")
-    print(f"  ✓ Berhasil: {success} | ✗ Gagal: {fail}")
+    print(f"\n  {C['C']}{'━' * 40}{C['R']}")
+    print(f"\n  {C['B']}Ringkasan:{C['R']} {C['G']}✓ {success} berhasil{C['R']}" + (f"  {C['RE']}✗ {fail} gagal{C['R']}" if fail else ""))
     
     # Tawarkan sync ke Portal PLN (periode tunggal: per)
     if success > 0:
         offer_portal_sync(data_type, [per], date_str)
     
-    input("  Tekan Enter...")
+    input(f"  {C['D']}[Enter]{C['R']}")
 
 def main():
     config = load_config()
@@ -1269,7 +1269,7 @@ def main():
             print("\n  Login...")
             token, user, gi_id = do_login(config)
             if not token:
-                input("  Tekan Enter...")
+                input(f"  {C['D']}[Enter]{C['R']}")
                 continue
         
         try:
@@ -1277,7 +1277,7 @@ def main():
                 date_str = input("  Tanggal (YYYY-MM-DD): ").strip() or date_str
             elif choice == 'l':
                 token, user, gi_id = do_login(config)
-                input("  Tekan Enter...")
+                input(f"  {C['D']}[Enter]{C['R']}")
             elif choice == 's':
                 setup_config()
                 config = load_config()
@@ -1308,7 +1308,7 @@ def main():
                 batch_fill_periode(token, "tegangan-trafo", gi_id, date_str, user)
         except Exception as e:
             print(f"\n  ✗ Error: {e}")
-            input("  Tekan Enter...")
+            input(f"  {C['D']}[Enter]{C['R']}")
 
 if __name__ == "__main__":
     main()
