@@ -1,0 +1,451 @@
+#!/usr/bin/env python3
+"""
+SUPER-I APP → Portal PLN Sync Tool
+====================================
+Otomatis fetch data dari SUPER-I APP API lalu sync ke Portal PLN APD Jakarta.
+
+Usage:
+  superi sync                    # Menu interaktif
+  superi sync --type all --jam 08       # Sync semua tipe jam 08
+  superi sync --type penyulang --jam 09  # Sync beban penyulang jam 09
+  superi sync --type trafo --jam 08-10   # Sync beban trafo jam 08 s/d 10
+  superi sync --type tegangan --jam 08   # Sync tegangan trafo jam 08
+  superi sync --dry-run                  # Preview tanpa nulis
+
+Tanggal default: hari ini. Override: --date 2026-06-19
+"""
+
+import json
+import sys
+import time
+import os
+import urllib.request
+import urllib.error
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
+# ============ PATHS ============
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPT_DIR)
+
+# ============ CONFIG LOADER ============
+# Credentials & config dibaca dari .superi_config.json (gitignored).
+# Gunakan .superi_config.example.json sebagai template.
+def _load_config():
+    cfg_path = os.path.join(SCRIPT_DIR, ".superi_config.json")
+    cfg = {}
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, "r") as f:
+                cfg = json.load(f)
+        except Exception as e:
+            print(f"  \033[91m✗ Gagal membaca .superi_config.json: {e}\033[0m")
+    return cfg
+
+_CFG = _load_config()
+
+def _get(key: str, env_key: str, default: str = "") -> str:
+    """Priority: ENV var → config file → default."""
+    return os.environ.get(env_key) or _CFG.get(key) or default
+
+# ============ SUPER-I API CONFIG ============
+SUPER_I_API = "https://super-i-app.plnes.co.id/api"
+SUPER_I_AUTH = f"{SUPER_I_API}/auth/login-mobile"
+SUPER_I_NIP = _get("nip", "SUPERI_NIP")
+SUPER_I_PASS = _get("password", "SUPERI_PASSWORD")
+SUPER_I_GI_ID = int(_get("gi_id", "SUPERI_GI_ID", "222"))  # GI MANGGARAI di SUPER-I
+
+SUPER_I_ENDPOINTS = {
+    "penyulang": "/gama/opgi-20kv/operator-gi/beban-penyulang",
+    "trafo": "/gama/opgi-20kv/operator-gi/beban-trafo",
+    "tegangan": "/gama/opgi-20kv/operator-gi/tegangan-trafo",
+}
+
+# ============ PORTAL PLN CONFIG ============
+PORTAL_URL = _get("portal_url", "PORTAL_URL", "http://10.3.187.6/apdjakarta")
+PORTAL_USER = _get("portal_user", "PORTAL_USER")
+PORTAL_PASS = _get("portal_password", "PORTAL_PASSWORD")
+PORTAL_GI_ID = _get("portal_gi_id", "PORTAL_GI_ID", "143")  # GI MANGGARAI di Portal PLN
+
+PORTAL_ENDPOINTS = {
+    "penyulang": {
+        "get": "/opdistbeban/beban_penyulang_c/get_beban_penyulang",
+        "update": "/opdistbeban/beban_penyulang_c/update_beban",
+    },
+    "trafo": {
+        "get": "/opdistbeban/beban_trafo_c/get_beban_trafo",
+        "update": "/opdistbeban/beban_trafo_c/update_beban",
+    },
+    "tegangan": {
+        "get": "/opdistbeban/teg_trafo_c/get_teg_trafo",
+        "update": "/opdistbeban/teg_trafo_c/update_beban",
+    },
+}
+
+# ============ UI ============
+R = '\033[0m'; B = '\033[1m'; G = '\033[92m'; Y = '\033[93m'; RE = '\033[91m'; C = '\033[96m'; D = '\033[2m'
+
+def header(t): print(f"\n{B}{C}{'='*60}{R}\n{B}{C}{t.center(60)}{R}\n{B}{C}{'='*60}{R}")
+def ok(t): print(f"  {G}✓ {t}{R}")
+def err(t): print(f"  {RE}✗ {t}{R}")
+def info(t): print(f"  {C}ℹ {t}{R}")
+def warn(t): print(f"  {Y}⚠ {t}{R}")
+
+# ============ SUPER-I API CLIENT ============
+def superi_login() -> Optional[str]:
+    """Login ke SUPER-I API, return token."""
+    try:
+        req = urllib.request.Request(SUPER_I_AUTH,
+            data=json.dumps({"nip": SUPER_I_NIP, "password": SUPER_I_PASS}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            d = json.loads(resp.read())
+        if d.get("success"):
+            return d["data"]["access_token"]
+    except Exception as e:
+        err(f"SUPER-I login error: {e}")
+    return None
+
+def superi_get(path: str, token: str, params: dict = None):
+    """GET request ke SUPER-I API."""
+    url = f"{SUPER_I_API}{path}"
+    if params:
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"{url}?{qs}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+def fetch_superi_data(data_type: str, token: str, date_str: str) -> Dict:
+    """
+    Fetch data dari SUPER-I API.
+    Returns: {nama: [val_per_jam_0..23], ...} untuk beban
+             {nama: {mv: [...], hv: [...]}, ...} untuk tegangan
+    """
+    ep = SUPER_I_ENDPOINTS[data_type]
+    status, data = superi_get(ep, token, params={"garduIndukId": SUPER_I_GI_ID, "date": date_str})
+    
+    if status != 200:
+        err(f"SUPER-I fetch failed: HTTP {status}")
+        return {}
+    
+    items = data.get("data", {}).get("items", [])
+    result = {}
+    
+    for item in items:
+        nama = item.get("nama", "").strip()
+        if not nama:
+            continue
+        
+        if data_type == "tegangan":
+            entries = item.get("tegangan", [])
+            mv = [None] * 24
+            hv = [None] * 24
+            for e in entries:
+                p = e.get("periode", -1)
+                if 0 <= p < 24:
+                    mv[p] = e.get("mv")
+                    hv[p] = e.get("hv")
+            result[nama] = {"mv": mv, "hv": hv}
+        else:
+            entries = item.get("beban", [])
+            jams = [None] * 24
+            for e in entries:
+                p = e.get("periode", -1)
+                if 0 <= p < 24:
+                    jams[p] = e.get("beban")
+            result[nama] = jams
+    
+    return result
+
+# ============ PORTAL PLN CLIENT ============
+try:
+    import requests
+    REQUESTS_OK = True
+except ImportError:
+    REQUESTS_OK = False
+
+class PortalPLN:
+    def __init__(self):
+        if not REQUESTS_OK:
+            raise ImportError("requests library needed. Run: .venv/bin/pip install requests")
+        self.session = requests.Session()
+    
+    def login(self) -> bool:
+        try:
+            r = self.session.post(f"{PORTAL_URL}/login/validate",
+                data={'userid': PORTAL_USER, 'password': PORTAL_PASS},
+                allow_redirects=True, timeout=10)
+            return r.status_code == 200
+        except:
+            return False
+    
+    def fetch_grid(self, data_type: str, date_str: str) -> Dict:
+        ep = PORTAL_ENDPOINTS[data_type]["get"]
+        try:
+            r = self.session.get(f"{PORTAL_URL}{ep}",
+                params={'gi': PORTAL_GI_ID, 'dt1': f"{date_str} 00:00:00"}, timeout=15)
+            if r.status_code != 200:
+                return {}
+            data = r.json()
+            grid = {}
+            for row in data:
+                key = row.get('feeder') or row.get('no_trafo') or ''
+                key = key.strip()
+                if key:
+                    grid[key] = row
+            return grid
+        except:
+            return {}
+    
+    def update_cell(self, data_type: str, rowdata: Dict, col: str, value) -> bool:
+        ep = PORTAL_ENDPOINTS[data_type]["update"]
+        params = {'col': col}
+        for k, v in rowdata.items():
+            params[k] = '' if v is None else v
+        params[col] = value
+        try:
+            r = self.session.get(f"{PORTAL_URL}{ep}", params=params, timeout=10)
+            if r.status_code == 200:
+                resp = r.json()
+                return resp.get('status') == 'success'
+        except:
+            pass
+        return False
+
+# ============ SYNC ENGINE ============
+def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run: bool = True):
+    """Full sync: fetch SUPER-I → push Portal PLN."""
+    
+    type_labels = {"penyulang": "Beban Penyulang", "trafo": "Beban Trafo", "tegangan": "Tegangan Trafo"}
+    header(f"SYNC {type_labels[data_type]}")
+    
+    # 1. SUPER-I: fetch
+    info("SUPER-I APP: Logging in...")
+    token = superi_login()
+    if not token:
+        err("SUPER-I login failed")
+        return False
+    ok("SUPER-I login OK")
+    
+    info(f"SUPER-I APP: Fetching {data_type} data...")
+    superi_data = fetch_superi_data(data_type, token, date_str)
+    if not superi_data:
+        err("No data from SUPER-I")
+        return False
+    ok(f"Got {len(superi_data)} items from SUPER-I")
+    
+    # 2. Portal PLN: login + fetch grid
+    info("Portal PLN: Logging in...")
+    pln = PortalPLN()
+    if not pln.login():
+        err("Portal PLN login failed")
+        return False
+    ok("Portal PLN login OK")
+    
+    info("Portal PLN: Fetching grid...")
+    grid = pln.fetch_grid(data_type, date_str)
+    if not grid:
+        err("Portal PLN grid fetch failed")
+        return False
+    ok(f"Got {len(grid)} items from Portal PLN")
+    
+    # 3. Sync
+    mode = f"{Y}DRY-RUN{R}" if dry_run else f"{G}LIVE{R}"
+    info(f"Mode: {mode} | Jam: {jam_start:02d}-{jam_end:02d} | Date: {date_str}")
+    print()
+    
+    updates = 0; errors = 0; skipped = 0
+    
+    # Build normalized lookup for grid (handle name variations like "TRAFO PS 1" vs "TRAFO PS1")
+    def _normalize(s: str) -> str:
+        return ''.join(s.upper().split())  # remove all whitespace + uppercase
+    
+    grid_normalized = {_normalize(k): (k, v) for k, v in grid.items()}
+    
+    for name, values in superi_data.items():
+        # Try exact match first, then normalized
+        rowdata = None
+        if name in grid:
+            rowdata = grid[name]
+        else:
+            norm = _normalize(name)
+            if norm in grid_normalized:
+                _, rowdata = grid_normalized[norm]
+        
+        if rowdata is None:
+            skipped += 1
+            continue
+        
+        if data_type == "tegangan":
+            mv_vals = values.get("mv", [])
+            hv_vals = values.get("hv", [])
+            for h in range(jam_start, jam_end + 1):
+                # MV → j column
+                if h < len(mv_vals) and mv_vals[h] is not None:
+                    col = f"j{h:02d}"
+                    existing = rowdata.get(col)
+                    if existing is not None and abs(float(existing) - float(mv_vals[h])) < 0.001:
+                        skipped += 1
+                    elif dry_run:
+                        print(f"  [DRY] {name} {col}(MV): {existing} → {mv_vals[h]}")
+                        updates += 1
+                    else:
+                        if pln.update_cell(data_type, rowdata, col, mv_vals[h]):
+                            updates += 1
+                        else:
+                            errors += 1
+                        time.sleep(0.05)
+                
+                # HV → k column
+                if h < len(hv_vals) and hv_vals[h] is not None:
+                    col = f"k{h:02d}"
+                    existing = rowdata.get(col)
+                    if existing is not None and abs(float(existing) - float(hv_vals[h])) < 0.001:
+                        skipped += 1
+                    elif dry_run:
+                        print(f"  [DRY] {name} {col}(HV): {existing} → {hv_vals[h]}")
+                        updates += 1
+                    else:
+                        if pln.update_cell(data_type, rowdata, col, hv_vals[h]):
+                            updates += 1
+                        else:
+                            errors += 1
+                        time.sleep(0.05)
+        else:
+            jams = values if isinstance(values, list) else []
+            for h in range(jam_start, jam_end + 1):
+                if h >= len(jams) or jams[h] is None:
+                    continue
+                col = f"j{h:02d}"
+                existing = rowdata.get(col)
+                if existing is not None and str(existing) == str(jams[h]):
+                    skipped += 1
+                elif dry_run:
+                    print(f"  [DRY] {name} {col}: {existing} → {jams[h]}")
+                    updates += 1
+                else:
+                    if pln.update_cell(data_type, rowdata, col, jams[h]):
+                        updates += 1
+                        print(f"  {G}[OK]{R} {name} {col}={jams[h]}")
+                    else:
+                        errors += 1
+                        err(f"{name} {col}={jams[h]}")
+                    time.sleep(0.05)
+    
+    # Summary
+    print(f"\n  {B}Summary:{R}")
+    print(f"    Updates : {updates}")
+    print(f"    Errors  : {errors}")
+    print(f"    Skipped : {skipped}")
+    return errors == 0
+
+# ============ INTERACTIVE MENU ============
+def menu():
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    while True:
+        header("⚡ SUPER-I → Portal PLN Sync")
+        print(f"  GI       : GI MANGGARAI")
+        print(f"  Tanggal  : {today}")
+        print()
+        print(f"  {B}Pilih data yang akan di-sync:{R}")
+        print(f"    1. Beban Penyulang  (32 feeder)")
+        print(f"    2. Beban Trafo      (3 trafo)")
+        print(f"    3. Tegangan Trafo   (5 trafo, MV+HV)")
+        print(f"    4. SEMUA            (penyulang + trafo + tegangan)")
+        print(f"    0. Keluar")
+        print()
+        
+        choice = input(f"  {C}Pilih [0-4]: {R}").strip()
+        if choice == "0":
+            print(f"\n  {C}Bye!{R}\n")
+            break
+        
+        type_map = {"1": ["penyulang"], "2": ["trafo"], "3": ["tegangan"], "4": ["penyulang", "trafo", "tegangan"]}
+        if choice not in type_map:
+            err("Pilihan tidak valid")
+            continue
+        
+        types = type_map[choice]
+        
+        # Jam
+        print()
+        jam_input = input(f"  {C}Jam (HH atau HH-HH, enter=semua): {R}").strip() or "0-23"
+        try:
+            if "-" in jam_input:
+                js, je = map(int, jam_input.split("-"))
+            else:
+                js = je = int(jam_input)
+            js = max(0, min(23, js)); je = max(0, min(23, je))
+        except:
+            err("Format jam salah")
+            continue
+        
+        # Tanggal
+        date_input = input(f"  {C}Tanggal [{today}]: {R}").strip() or today
+        
+        # Dry-run
+        print(f"\n  {B}--- DRY-RUN PREVIEW ---{R}")
+        for dt in types:
+            do_sync(dt, js, je, date_input, dry_run=True)
+        
+        # Confirm
+        print()
+        confirm = input(f"  {Y}Lanjut LIVE SYNC? (y/n): {R}").strip().lower()
+        if confirm == 'y':
+            print(f"\n  {B}--- LIVE SYNC ---{R}")
+            for dt in types:
+                do_sync(dt, js, je, date_input, dry_run=False)
+        else:
+            warn("Dibatalkan")
+        
+        input(f"\n  {D}[Enter untuk lanjut...]{R}")
+
+# ============ CLI ARGS ============
+def main():
+    args = sys.argv[1:]
+    
+    if '--help' in args or '-h' in args:
+        print(__doc__)
+        sys.exit(0)
+    
+    # Parse args
+    data_type = None
+    jam_start = 0; jam_end = 23
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    dry_run = '--dry-run' in args
+    
+    for i, a in enumerate(args):
+        if a == '--type' and i+1 < len(args):
+            t = args[i+1]
+            if t == 'all':
+                data_type = 'all'
+            elif t in ('penyulang', 'trafo', 'tegangan'):
+                data_type = t
+        elif a == '--jam' and i+1 < len(args):
+            v = args[i+1]
+            if '-' in v:
+                jam_start, jam_end = map(int, v.split('-'))
+            else:
+                jam_start = jam_end = int(v)
+        elif a == '--date' and i+1 < len(args):
+            date_str = args[i+1]
+    
+    # Non-interactive mode
+    if data_type:
+        types = ["penyulang", "trafo", "tegangan"] if data_type == 'all' else [data_type]
+        for dt in types:
+            success = do_sync(dt, jam_start, jam_end, date_str, dry_run=dry_run)
+            if not success and not dry_run:
+                sys.exit(1)
+        sys.exit(0)
+    
+    # Interactive menu
+    menu()
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,1241 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SUPER-I APP - Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0d1b2a;
+            color: #e0e6ed;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(90deg, #1a2a4a 0%, #0d1b2a 100%);
+            padding: 16px 24px;
+            border-bottom: 2px solid #1e3a5f;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .header h1 {
+            font-size: 18px;
+            color: #4dabf7;
+        }
+        .header-info {
+            font-size: 12px;
+            color: #8b9bb4;
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        .header-info strong { color: #e0e6ed; }
+        .btn-logout {
+            background: rgba(255,77,77,0.15);
+            color: #ff8787;
+            border: 1px solid rgba(255,77,77,0.3);
+            padding: 8px 16px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-size: 12px;
+        }
+        .container {
+            padding: 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .toolbar {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .toolbar input[type=date] {
+            padding: 8px 12px;
+            background: #1a2a4a;
+            border: 1px solid #2a3f5f;
+            border-radius: 6px;
+            color: #fff;
+        }
+        .btn {
+            padding: 8px 16px;
+            background: #4dabf7;
+            color: #0d1b2a;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn:hover { background: #74c0fc; }
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 16px;
+            border-bottom: 2px solid #1e3a5f;
+        }
+        .tab {
+            padding: 10px 20px;
+            background: transparent;
+            color: #8b9bb4;
+            border: none;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+        }
+        .tab.active {
+            color: #4dabf7;
+            border-bottom-color: #4dabf7;
+        }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+            gap: 16px;
+        }
+        .card {
+            background: #142540;
+            border: 1px solid #1e3a5f;
+            border-radius: 10px;
+            padding: 16px;
+            transition: border 0.2s;
+        }
+        .card:hover {
+            border-color: #4dabf7;
+        }
+        .card.cb-off {
+            opacity: 0.5;
+            border-color: #ff4d4d33;
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+        }
+        .periods-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .period-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #4dabf7;
+        }
+        .btn-batch-periode {
+            background: rgba(255,212,59,0.2);
+            color: #ffd43b;
+            border: 1px solid rgba(255,212,59,0.4);
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 10px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .btn-batch-periode:hover {
+            background: rgba(255,212,59,0.3);
+        }
+        .periode-grid {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .periode-card {
+            background: #142540;
+            border: 2px solid #1e3a5f;
+            border-radius: 8px;
+            padding: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .periode-card:hover {
+            border-color: #4dabf7;
+        }
+        .periode-card.selected {
+            border-color: #ffd43b;
+            background: rgba(255,212,59,0.1);
+        }
+        .periode-num {
+            font-size: 14px;
+            font-weight: 700;
+            color: #4dabf7;
+            margin-bottom: 4px;
+        }
+        .periode-empty-count {
+            font-size: 11px;
+            color: #8b9bb4;
+        }
+        .periode-empty-count strong {
+            color: #ffd43b;
+        }
+        .batch-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 12px 0;
+        }
+        .batch-table th, .batch-table td {
+            padding: 6px 8px;
+            text-align: left;
+            border-bottom: 1px solid #1e3a5f;
+            font-size: 12px;
+        }
+        .batch-table th {
+            color: #8b9bb4;
+            font-weight: 600;
+            font-size: 10px;
+            text-transform: uppercase;
+        }
+        .batch-table input {
+            width: 80px;
+            padding: 4px 8px;
+            background: #0d1b2a;
+            border: 1px solid #2a3f5f;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 12px;
+        }
+        .batch-stats {
+            font-size: 10px;
+            color: #5a6b80;
+        }
+        .modal-box.large {
+            max-width: 700px;
+        }
+        .pattern-info {
+            background: rgba(77,171,247,0.1);
+            border: 1px solid rgba(77,171,247,0.3);
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 12px;
+            font-size: 12px;
+            color: #b0d3f5;
+        }
+        .card-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+        }
+        .card-meta {
+            font-size: 11px;
+            color: #8b9bb4;
+            margin-top: 4px;
+        }
+        .badge {
+            font-size: 10px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .badge-on { background: rgba(81,207,102,0.2); color: #69db7c; }
+        .badge-off { background: rgba(255,77,77,0.2); color: #ff8787; }
+        .badge-ps { background: rgba(255,212,59,0.2); color: #ffd43b; }
+        .progress-bar {
+            background: #0d1b2a;
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 8px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4dabf7, #69db7c);
+            transition: width 0.3s;
+        }
+        .progress-fill.full { background: #69db7c; }
+        .progress-fill.empty { background: #ff8787; }
+        .periods {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 3px;
+            margin-top: 10px;
+        }
+        .period {
+            aspect-ratio: 1;
+            background: #0d1b2a;
+            border: 1px solid #1e3a5f;
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 9px;
+            color: #5a6b80;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .period.filled {
+            background: #2b8a3e;
+            border-color: #51cf66;
+            color: #fff;
+            font-weight: 600;
+        }
+        .period.empty:hover {
+            background: #4dabf7;
+            color: #0d1b2a;
+            border-color: #4dabf7;
+        }
+        .period.disabled { cursor: not-allowed; opacity: 0.3; }
+        .stats {
+            display: flex;
+            gap: 12px;
+            font-size: 11px;
+            color: #8b9bb4;
+            margin-top: 8px;
+        }
+        .stats span { color: #e0e6ed; font-weight: 600; }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .modal.show { display: flex; }
+        .modal-box {
+            background: #142540;
+            border: 1px solid #2a3f5f;
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 500px;
+            width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .modal h2 {
+            font-size: 18px;
+            color: #4dabf7;
+            margin-bottom: 16px;
+        }
+        .modal .form-group { margin-bottom: 14px; }
+        .modal label {
+            display: block;
+            font-size: 12px;
+            color: #b0bcc9;
+            margin-bottom: 6px;
+        }
+        .modal input {
+            width: 100%;
+            padding: 10px 12px;
+            background: #0d1b2a;
+            border: 1px solid #2a3f5f;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 14px;
+        }
+        .modal input:focus { outline: none; border-color: #4dabf7; }
+        .modal-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            margin-top: 16px;
+        }
+        .btn-cancel {
+            background: transparent;
+            color: #8b9bb4;
+            border: 1px solid #2a3f5f;
+        }
+        .btn-cancel:hover { background: #1a2a4a; }
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 13px;
+            z-index: 2000;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.3s;
+        }
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .toast.success { background: #2b8a3e; color: #fff; }
+        .toast.error { background: #c92a2a; color: #fff; }
+        .suggested {
+            font-size: 11px;
+            color: #ffd43b;
+            margin-top: 4px;
+        }
+        @media (max-width: 768px) {
+            .grid { grid-template-columns: 1fr; }
+            .header-info { font-size: 11px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>⚡ SUPER-I APP Dashboard</h1>
+            <div class="header-info">
+                <span>👤 <strong>{{ user.namaLengkap }}</strong></span>
+                <span>🏢 <strong>GI MANGGARAI</strong></span>
+                <span>📅 <strong>{{ date_str }}</strong></span>
+            </div>
+        </div>
+        <a href="/logout" class="btn-logout">Keluar</a>
+    </div>
+
+    <div class="container">
+        <div class="toolbar">
+            <label>Tanggal:</label>
+            <input type="date" id="dateInput" value="{{ date_str }}">
+            <button class="btn" onclick="changeDate()">Tampilkan</button>
+            <button class="btn" onclick="location.reload()">🔄 Refresh</button>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('penyulang')">Beban Penyulang ({{ penyulang_data|length }})</button>
+            <button class="tab" onclick="showTab('trafo')">Beban Trafo ({{ trafo_data|length }})</button>
+            <button class="tab" onclick="showTab('tegangan')">Tegangan Trafo ({{ tegangan_data|length }})</button>
+        </div>
+
+        <!-- BEBAN PENYULANG -->
+        <div id="tab-penyulang" class="tab-content active">
+            <div style="margin-bottom: 16px;">
+                <button class="btn" style="background:#ffd43b; color:#0d1b2a;" onclick="showBatchPeriodeSelector('beban-penyulang')">⚡ Batch Input per Jam</button>
+            </div>
+            <div class="grid">
+                {% for item in penyulang_data %}
+                <div class="card {{ 'cb-off' if item.statusCB == 'OFF' }}" 
+                     data-type="beban-penyulang" 
+                     data-id="{{ item.id }}" 
+                     data-name="{{ item.nama }}">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">{{ item.nama }}</div>
+                            <div class="card-meta">
+                                ID:{{ item.id }} | iMax={{ item.iMax }}A
+                                {% if item.trafo %} | {{ item.trafo.nama }}{% endif %}
+                            </div>
+                        </div>
+                        {% if item.statusCB == 'OFF' %}
+                            <span class="badge badge-off">⛔ CB OFF</span>
+                        {% else %}
+                            <span class="badge badge-on">✓ CB ON</span>
+                        {% endif %}
+                    </div>
+                    {% set filled = item.beban|length %}
+                    {% set empty_periods = [] %}
+                    {% set period_data = {} %}
+                    {% for entry in item.beban %}
+                        {% set _ = period_data.update({entry.periode: entry}) %}
+                    {% endfor %}
+                    <div class="progress-bar">
+                        <div class="progress-fill {{ 'full' if filled == 24 else 'empty' if filled == 0 else '' }}"
+                             style="width: {{ (filled / 24 * 100)|round }}%;"></div>
+                    </div>
+                    <div class="stats">
+                        <div>Terisi: <span>{{ filled }}/24</span></div>
+                        {% if filled > 0 %}
+                        {% set values = item.beban|map(attribute='beban')|list %}
+                        <div>Range: <span>{{ values|min }}-{{ values|max }}A</span></div>
+                        {% endif %}
+                    </div>
+                    <div class="periods">
+                        {% for p in range(24) %}
+                            {% if p in period_data %}
+                                <div class="period filled" 
+                                     title="P{{ '%02d' % p }}: {{ period_data[p].beban }}A"
+                                     data-period="{{ p }}"
+                                     data-value="{{ period_data[p].beban }}"
+                                     data-entry-id="{{ period_data[p].id }}"
+                                     onclick="showDeleteOption(this, 'beban-penyulang')">{{ p }}</div>
+                            {% else %}
+                                <div class="period empty {{ 'disabled' if item.statusCB == 'OFF' }}"
+                                     data-period="{{ p }}"
+                                     onclick="{% if item.statusCB != 'OFF' %}showInputModal(this, 'beban-penyulang'){% endif %}">{{ p }}</div>
+                            {% endif %}
+                        {% endfor %}
+                    </div>
+                    {% if item.statusCB != 'OFF' and filled < 24 %}
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- BEBAN TRAFO -->
+        <div id="tab-trafo" class="tab-content">
+            <div style="margin-bottom: 16px;">
+                <button class="btn" style="background:#ffd43b; color:#0d1b2a;" onclick="showBatchPeriodeSelector('beban-trafo')">⚡ Batch Input per Jam</button>
+            </div>
+            <div class="grid">
+                {% for item in trafo_data %}
+                <div class="card" 
+                     data-type="beban-trafo" 
+                     data-id="{{ item.id }}" 
+                     data-name="{{ item.nama }}">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">{{ item.nama }}</div>
+                            <div class="card-meta">ID:{{ item.id }} | iMax={{ item.iMax }}A</div>
+                        </div>
+                    </div>
+                    {% set filled = item.beban|length %}
+                    {% set period_data = {} %}
+                    {% for entry in item.beban %}
+                        {% set _ = period_data.update({entry.periode: entry}) %}
+                    {% endfor %}
+                    <div class="progress-bar">
+                        <div class="progress-fill {{ 'full' if filled == 24 else '' }}"
+                             style="width: {{ (filled / 24 * 100)|round }}%;"></div>
+                    </div>
+                    <div class="stats">
+                        <div>Terisi: <span>{{ filled }}/24</span></div>
+                        {% if filled > 0 %}
+                        {% set values = item.beban|map(attribute='beban')|list %}
+                        <div>Range: <span>{{ values|min }}-{{ values|max }}A</span></div>
+                        {% endif %}
+                    </div>
+                    <div class="periods">
+                        {% for p in range(24) %}
+                            {% if p in period_data %}
+                                <div class="period filled" 
+                                     title="P{{ '%02d' % p }}: {{ period_data[p].beban }}A"
+                                     data-period="{{ p }}"
+                                     data-value="{{ period_data[p].beban }}"
+                                     data-entry-id="{{ period_data[p].id }}"
+                                     onclick="showDeleteOption(this, 'beban-trafo')">{{ p }}</div>
+                            {% else %}
+                                <div class="period empty"
+                                     data-period="{{ p }}"
+                                     onclick="showInputModal(this, 'beban-trafo')">{{ p }}</div>
+                            {% endif %}
+                        {% endfor %}
+                    </div>
+                    {% if filled < 24 %}
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- TEGANGAN TRAFO -->
+        <div id="tab-tegangan" class="tab-content">
+            <div style="margin-bottom: 16px;">
+                <button class="btn" style="background:#ffd43b; color:#0d1b2a;" onclick="showBatchPeriodeSelector('tegangan-trafo')">⚡ Batch Input per Jam</button>
+            </div>
+            <div class="grid">
+                {% for item in tegangan_data %}
+                <div class="card" 
+                     data-type="tegangan-trafo" 
+                     data-id="{{ item.id }}" 
+                     data-name="{{ item.nama }}">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">{{ item.nama }}</div>
+                            <div class="card-meta">ID:{{ item.id }}</div>
+                        </div>
+                        {% if item.isPS %}
+                            <span class="badge badge-ps">PS</span>
+                        {% else %}
+                            <span class="badge badge-on">GI</span>
+                        {% endif %}
+                    </div>
+                    {% set filled = item.tegangan|length %}
+                    {% set period_data = {} %}
+                    {% for entry in item.tegangan %}
+                        {% set _ = period_data.update({entry.periode: entry}) %}
+                    {% endfor %}
+                    <div class="progress-bar">
+                        <div class="progress-fill {{ 'full' if filled == 24 else '' }}"
+                             style="width: {{ (filled / 24 * 100)|round }}%;"></div>
+                    </div>
+                    <div class="stats">
+                        <div>Terisi: <span>{{ filled }}/24</span></div>
+                        {% if filled > 0 %}
+                        {% set mvs = item.tegangan|map(attribute='mv')|list %}
+                        {% set hvs = item.tegangan|map(attribute='hv')|list %}
+                        <div>MV: <span>{{ mvs|min }}-{{ mvs|max }}kV</span></div>
+                        <div>HV: <span>{{ hvs|min }}-{{ hvs|max }}kV</span></div>
+                        {% endif %}
+                    </div>
+                    <div class="periods">
+                        {% for p in range(24) %}
+                            {% if p in period_data %}
+                                <div class="period filled" 
+                                     title="P{{ '%02d' % p }}: HV={{ period_data[p].hv }}kV MV={{ period_data[p].mv }}kV"
+                                     data-period="{{ p }}"
+                                     data-mv="{{ period_data[p].mv }}"
+                                     data-hv="{{ period_data[p].hv }}"
+                                     data-entry-id="{{ period_data[p].id }}"
+                                     onclick="showDeleteOption(this, 'tegangan-trafo')">{{ p }}</div>
+                            {% else %}
+                                <div class="period empty"
+                                     data-period="{{ p }}"
+                                     onclick="showInputModal(this, 'tegangan-trafo')">{{ p }}</div>
+                            {% endif %}
+                        {% endfor %}
+                    </div>
+                    {% if filled < 24 %}
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- INPUT MODAL -->
+    <div id="inputModal" class="modal">
+        <div class="modal-box">
+            <h2 id="modalTitle">Input Data</h2>
+            <div class="form-group">
+                <label>Item</label>
+                <input type="text" id="modalItemName" disabled>
+            </div>
+            <div class="form-group">
+                <label>Periode (Jam)</label>
+                <input type="text" id="modalPeriode" disabled>
+            </div>
+            <div id="bebanField" class="form-group">
+                <label>Nilai Beban (Ampere)</label>
+                <input type="number" id="modalValue" step="0.1" placeholder="Masukkan nilai">
+                <div class="suggested" id="suggestedValue"></div>
+            </div>
+            <div id="teganganField" style="display:none;">
+                <div class="form-group">
+                    <label>Nilai MV (kV)</label>
+                    <input type="number" id="modalMv" step="0.01" placeholder="Masukkan MV">
+                    <div class="suggested" id="suggestedMv"></div>
+                </div>
+                <div class="form-group">
+                    <label>Nilai HV (kV)</label>
+                    <input type="number" id="modalHv" step="0.01" placeholder="Masukkan HV">
+                    <div class="suggested" id="suggestedHv"></div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-cancel" onclick="closeModal()">Batal</button>
+                <button class="btn" onclick="submitInput()">Simpan</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- BATCH PERIODE MODAL -->
+    <div id="batchPeriodeModal" class="modal">
+        <div class="modal-box large">
+            <h2>⚡ Batch Input per Jam</h2>
+            <p style="color:#8b9bb4; margin-bottom:12px;">Pilih jam (periode) yang kosong, lalu isi semua item sekaligus.</p>
+            
+            <div class="periode-grid" id="periodeGrid">
+                <!-- Generated by JS -->
+            </div>
+            
+            <div id="batchPeriodeDetails" style="display:none;">
+                <div class="pattern-info" id="patternInfoPeriode">
+                    Memuat pola data...
+                </div>
+                <div id="batchTableWrapper" style="margin-top:12px;">
+                    <!-- Table generated by JS -->
+                </div>
+            </div>
+            
+            <div class="modal-actions">
+                <button class="btn btn-cancel" onclick="closeBatchPeriodeModal()">Batal</button>
+                <button class="btn" id="batchPeriodeSubmitBtn" onclick="submitBatchPeriode()" style="display:none;">Simpan Semua</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- BATCH INPUT MODAL (OLD - per item) -->
+    <div id="batchModal" class="modal">
+        <div class="modal-box large">
+            <h2 id="batchTitle">⚡ Batch Fill</h2>
+            <div class="pattern-info" id="patternInfo">
+                Memuat pola data dari 7 hari terakhir...
+            </div>
+            <div id="batchTableWrapper">
+                <p style="color:#8b9bb4; text-align:center; padding: 20px;">Loading...</p>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-cancel" onclick="closeBatchModal()">Batal</button>
+                <button class="btn" id="batchSubmitBtn" onclick="submitBatch()">Simpan Semua</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- DELETE MODAL -->
+    <div id="deleteModal" class="modal">
+        <div class="modal-box">
+            <h2>Hapus Data</h2>
+            <p style="color:#b0bcc9; margin-bottom: 16px;" id="deleteMsg"></p>
+            <div class="modal-actions">
+                <button class="btn btn-cancel" onclick="closeDeleteModal()">Batal</button>
+                <button class="btn" style="background:#ff4d4d; color:#fff;" onclick="confirmDelete()">Hapus</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        const DATE_STR = "{{ date_str }}";
+        let currentInput = null;
+        let currentDelete = null;
+
+        function showTab(name) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById('tab-' + name).classList.add('active');
+        }
+
+        function changeDate() {
+            const date = document.getElementById('dateInput').value;
+            window.location.href = '/dashboard?date=' + date;
+        }
+
+        function showInputModal(periodEl, type) {
+            const card = periodEl.closest('.card');
+            const itemId = card.dataset.id;
+            const name = card.dataset.name;
+            const periode = parseInt(periodEl.dataset.period);
+
+            currentInput = { type, itemId, name, periode };
+
+            document.getElementById('modalItemName').value = name + ' (ID:' + itemId + ')';
+            document.getElementById('modalPeriode').value = 'P' + String(periode).padStart(2,'0');
+            document.getElementById('modalTitle').textContent = 'Input ' + getTypeName(type);
+
+            // Cari nilai dari periode sebelumnya untuk suggest
+            const filled = card.querySelectorAll('.period.filled');
+            let prevEntry = null;
+            let prevPeriode = -1;
+            filled.forEach(el => {
+                const p = parseInt(el.dataset.period);
+                if (p < periode && p > prevPeriode) {
+                    prevPeriode = p;
+                    prevEntry = el;
+                }
+            });
+            // Fallback: ambil periode terisi tertinggi
+            if (!prevEntry && filled.length > 0) {
+                let maxP = -1;
+                filled.forEach(el => {
+                    const p = parseInt(el.dataset.period);
+                    if (p > maxP) {
+                        maxP = p;
+                        prevEntry = el;
+                    }
+                });
+            }
+
+            if (type === 'tegangan-trafo') {
+                document.getElementById('bebanField').style.display = 'none';
+                document.getElementById('teganganField').style.display = 'block';
+                document.getElementById('modalMv').value = '';
+                document.getElementById('modalHv').value = '';
+                if (prevEntry) {
+                    const mv = prevEntry.dataset.mv;
+                    const hv = prevEntry.dataset.hv;
+                    const p = prevEntry.dataset.period;
+                    document.getElementById('modalMv').value = mv;
+                    document.getElementById('modalHv').value = hv;
+                    document.getElementById('suggestedMv').textContent = '→ Saran dari P' + String(p).padStart(2,'0') + ': ' + mv + 'kV';
+                    document.getElementById('suggestedHv').textContent = '→ Saran dari P' + String(p).padStart(2,'0') + ': ' + hv + 'kV';
+                } else {
+                    document.getElementById('suggestedMv').textContent = '';
+                    document.getElementById('suggestedHv').textContent = '';
+                }
+            } else {
+                document.getElementById('bebanField').style.display = 'block';
+                document.getElementById('teganganField').style.display = 'none';
+                document.getElementById('modalValue').value = '';
+                if (prevEntry) {
+                    const v = prevEntry.dataset.value;
+                    const p = prevEntry.dataset.period;
+                    document.getElementById('modalValue').value = v;
+                    document.getElementById('suggestedValue').textContent = '→ Saran dari P' + String(p).padStart(2,'0') + ': ' + v + 'A';
+                } else {
+                    document.getElementById('suggestedValue').textContent = '';
+                }
+            }
+
+            document.getElementById('inputModal').classList.add('show');
+        }
+
+        function closeModal() {
+            document.getElementById('inputModal').classList.remove('show');
+        }
+
+        async function submitInput() {
+            if (!currentInput) return;
+            const { type, itemId, periode } = currentInput;
+
+            let payload = { type, item_id: parseInt(itemId), periode, date: DATE_STR };
+            if (type === 'tegangan-trafo') {
+                payload.mv = parseFloat(document.getElementById('modalMv').value);
+                payload.hv = parseFloat(document.getElementById('modalHv').value);
+                if (!payload.mv || !payload.hv) {
+                    showToast('Isi MV dan HV!', 'error');
+                    return;
+                }
+            } else {
+                payload.value = parseFloat(document.getElementById('modalValue').value);
+                if (isNaN(payload.value)) {
+                    showToast('Isi nilai!', 'error');
+                    return;
+                }
+            }
+
+            try {
+                const resp = await fetch('/api/data/input', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    showToast('✓ ' + result.message + ' (ID:' + result.id + ')', 'success');
+                    closeModal();
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    showToast('✗ ' + result.message, 'error');
+                }
+            } catch (e) {
+                showToast('Error: ' + e.message, 'error');
+            }
+        }
+
+        function showDeleteOption(periodEl, type) {
+            const card = periodEl.closest('.card');
+            const name = card.dataset.name;
+            const periode = periodEl.dataset.period;
+            const entryId = periodEl.dataset.entryId;
+
+            currentDelete = { type, entryId };
+            document.getElementById('deleteMsg').textContent = 
+                'Hapus data ' + name + ' periode P' + String(periode).padStart(2,'0') + '?';
+            document.getElementById('deleteModal').classList.add('show');
+        }
+
+        function closeDeleteModal() {
+            document.getElementById('deleteModal').classList.remove('show');
+        }
+
+        async function confirmDelete() {
+            if (!currentDelete) return;
+            try {
+                const resp = await fetch('/api/data/delete', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(currentDelete)
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    showToast('✓ ' + result.message, 'success');
+                    closeDeleteModal();
+                    setTimeout(() => location.reload(), 800);
+                } else {
+                    showToast('✗ ' + result.message, 'error');
+                }
+            } catch (e) {
+                showToast('Error: ' + e.message, 'error');
+            }
+        }
+
+        function showToast(msg, type) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.className = 'toast show ' + type;
+            setTimeout(() => toast.classList.remove('show'), 3500);
+        }
+
+        function getTypeName(type) {
+            return {
+                'beban-penyulang': 'Beban Penyulang',
+                'beban-trafo': 'Beban Trafo',
+                'tegangan-trafo': 'Tegangan Trafo'
+            }[type];
+        }
+
+        // Close modal on backdrop click
+        document.querySelectorAll('.modal').forEach(m => {
+            m.addEventListener('click', e => {
+                if (e.target === m) m.classList.remove('show');
+            });
+        });
+
+        // ===== BATCH FILL LOGIC =====
+        let currentBatch = null;
+
+        async function showBatchModal(card, type) {
+            const itemId = parseInt(card.dataset.id);
+            const name = card.dataset.name;
+            currentBatch = { type, itemId, name };
+
+            document.getElementById('batchTitle').textContent = '⚡ Batch Fill — ' + name;
+            document.getElementById('patternInfo').textContent = 'Memuat pola data dari 7 hari terakhir...';
+            document.getElementById('batchTableWrapper').innerHTML = '<p style="color:#8b9bb4; text-align:center; padding: 20px;">Loading...</p>';
+            document.getElementById('batchModal').classList.add('show');
+
+            // Cari periode kosong dari card
+            const emptyPeriods = [];
+            card.querySelectorAll('.period.empty:not(.disabled)').forEach(el => {
+                emptyPeriods.push(parseInt(el.dataset.period));
+            });
+            currentBatch.emptyPeriods = emptyPeriods;
+
+            // Fetch pola historis
+            try {
+                const resp = await fetch(`/api/data/pattern?type=${type}&item_id=${itemId}&days=7`);
+                const result = await resp.json();
+                if (result.success) {
+                    currentBatch.pattern = result.pattern;
+                    renderBatchTable(type, emptyPeriods, result.pattern);
+                } else {
+                    document.getElementById('patternInfo').textContent = '⚠ Tidak bisa memuat pola: ' + (result.message || 'Error');
+                    renderBatchTable(type, emptyPeriods, {});
+                }
+            } catch(e) {
+                document.getElementById('patternInfo').textContent = '⚠ Error: ' + e.message;
+                renderBatchTable(type, emptyPeriods, {});
+            }
+        }
+
+        function renderBatchTable(type, emptyPeriods, pattern) {
+            const isTegangan = type === 'tegangan-trafo';
+            let samplesCount = 0;
+            Object.values(pattern).forEach(p => { if (p.samples > samplesCount) samplesCount = p.samples; });
+
+            document.getElementById('patternInfo').innerHTML = 
+                `📊 Pola dari <strong>${samplesCount}</strong> data (7 hari terakhir). ` +
+                `Nilai auto-fill berdasarkan rata-rata historis per periode. ` +
+                `<span style="color:#ffd43b">Kamu bisa edit sebelum simpan.</span>`;
+
+            let html = '<table class="batch-table"><thead><tr><th>Periode</th>';
+            if (isTegangan) {
+                html += '<th>MV (kV)</th><th>HV (kV)</th><th>Referensi</th>';
+            } else {
+                html += '<th>Nilai (A)</th><th>Referensi</th>';
+            }
+            html += '</tr></thead><tbody>';
+
+            emptyPeriods.forEach(p => {
+                const pKey = String(p);
+                const pData = pattern[pKey] || null;
+
+                html += `<tr><td style="color:#4dabf7; font-weight:600;">P${String(p).padStart(2,'0')}</td>`;
+                
+                if (isTegangan) {
+                    const mv = pData ? pData.mv_avg : '';
+                    const hv = pData ? pData.hv_avg : '';
+                    const stats = pData ? `avg MV=${pData.mv_avg} (${pData.mv_min}-${pData.mv_max}) | HV=${pData.hv_avg} (${pData.hv_min}-${pData.hv_max})` : 'no data';
+                    html += `<td><input type="number" step="0.01" value="${mv}" id="batch_mv_${p}"></td>`;
+                    html += `<td><input type="number" step="1" value="${hv}" id="batch_hv_${p}"></td>`;
+                    html += `<td class="batch-stats">${stats}</td>`;
+                } else {
+                    const val = pData ? pData.avg : '';
+                    const stats = pData ? `avg=${pData.raw_avg} (${pData.min}-${pData.max}) ${pData.samples}d` : 'no data';
+                    html += `<td><input type="number" step="1" value="${val}" id="batch_val_${p}"></td>`;
+                    html += `<td class="batch-stats">${stats}</td>`;
+                }
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            html += `<p style="font-size:11px; color:#8b9bb4; margin-top:8px;">Total: ${emptyPeriods.length} periode akan diinput</p>`;
+            document.getElementById('batchTableWrapper').innerHTML = html;
+        }
+
+        function closeBatchModal() {
+            document.getElementById('batchModal').classList.remove('show');
+        }
+
+        async function submitBatch() {
+            if (!currentBatch) return;
+            const { type, itemId, emptyPeriods } = currentBatch;
+            const isTegangan = type === 'tegangan-trafo';
+
+            // Collect values
+            const periods = [];
+            let hasEmpty = false;
+            emptyPeriods.forEach(p => {
+                if (isTegangan) {
+                    const mv = parseFloat(document.getElementById(`batch_mv_${p}`).value);
+                    const hv = parseFloat(document.getElementById(`batch_hv_${p}`).value);
+                    if (!isNaN(mv) && !isNaN(hv)) {
+                        periods.push({ periode: p, mv, hv });
+                    } else {
+                        hasEmpty = true;
+                    }
+                } else {
+                    const val = parseFloat(document.getElementById(`batch_val_${p}`).value);
+                    if (!isNaN(val) && val >= 0) {
+                        periods.push({ periode: p, value: val });
+                    } else {
+                        hasEmpty = true;
+                    }
+                }
+            });
+
+            if (periods.length === 0) {
+                showToast('Isi minimal 1 nilai!', 'error');
+                return;
+            }
+
+            document.getElementById('batchSubmitBtn').disabled = true;
+            document.getElementById('batchSubmitBtn').textContent = 'Menyimpan...';
+
+            try {
+                const resp = await fetch('/api/data/batch-input', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ type, item_id: itemId, periods, date: DATE_STR })
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    const success = result.results.filter(r => r.success).length;
+                    const fail = result.results.filter(r => !r.success).length;
+                    let msg = `✓ Batch selesai: ${success} berhasil`;
+                    if (fail > 0) msg += `, ${fail} gagal`;
+                    showToast(msg, fail > 0 ? 'error' : 'success');
+                    closeBatchModal();
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    showToast('✗ ' + result.message, 'error');
+                }
+            } catch(e) {
+                showToast('Error: ' + e.message, 'error');
+            }
+
+            document.getElementById('batchSubmitBtn').disabled = false;
+            document.getElementById('batchSubmitBtn').textContent = 'Simpan Semua';
+        }
+
+        // ===== BATCH PER PERIODE (per jam) =====
+        let currentBatchPeriode = null;
+
+        function showBatchPeriodeSelector(type) {
+            currentBatchPeriode = { type, periode: null };
+            
+            // Reset modal
+            document.getElementById('batchPeriodeDetails').style.display = 'none';
+            document.getElementById('batchPeriodeSubmitBtn').style.display = 'none';
+            
+            // Hitung berapa item kosong per periode (dari DOM)
+            const tabId = type === 'beban-penyulang' ? 'tab-penyulang' : 
+                         type === 'beban-trafo' ? 'tab-trafo' : 'tab-tegangan';
+            const tab = document.getElementById(tabId);
+            const cards = tab.querySelectorAll('.card:not(.cb-off)');
+            
+            const emptyByPeriode = {};
+            const totalItems = cards.length;
+            for (let p = 0; p < 24; p++) {
+                emptyByPeriode[p] = 0;
+                cards.forEach(card => {
+                    const periodEl = card.querySelector(`.period[data-period="${p}"]`);
+                    if (periodEl && periodEl.classList.contains('empty') && !periodEl.classList.contains('disabled')) {
+                        emptyByPeriode[p]++;
+                    }
+                });
+            }
+            
+            // Render grid periode
+            let html = '';
+            for (let p = 0; p < 24; p++) {
+                const empty = emptyByPeriode[p];
+                const status = empty === 0 ? 'Penuh' : `<strong>${empty}</strong> kosong`;
+                const disabled = empty === 0 ? 'opacity:0.3; pointer-events:none;' : '';
+                html += `
+                    <div class="periode-card" style="${disabled}" onclick="selectPeriode(${p})" id="pc_${p}">
+                        <div class="periode-num">P${String(p).padStart(2,'0')}:00</div>
+                        <div class="periode-empty-count">${status}</div>
+                    </div>
+                `;
+            }
+            document.getElementById('periodeGrid').innerHTML = html;
+            document.getElementById('batchPeriodeModal').classList.add('show');
+        }
+
+        async function selectPeriode(periode) {
+            // Highlight selected
+            document.querySelectorAll('.periode-card').forEach(c => c.classList.remove('selected'));
+            document.getElementById(`pc_${periode}`).classList.add('selected');
+            
+            currentBatchPeriode.periode = periode;
+            const type = currentBatchPeriode.type;
+            
+            document.getElementById('batchPeriodeDetails').style.display = 'block';
+            document.getElementById('patternInfoPeriode').textContent = 'Memuat pola dari 7 hari terakhir...';
+            document.getElementById('batchTableWrapper').innerHTML = '<p style="color:#8b9bb4; text-align:center; padding:20px;">Loading...</p>';
+            
+            // Cari semua item yang KOSONG di periode ini
+            const tabId = type === 'beban-penyulang' ? 'tab-penyulang' : 
+                         type === 'beban-trafo' ? 'tab-trafo' : 'tab-tegangan';
+            const tab = document.getElementById(tabId);
+            const cards = tab.querySelectorAll('.card:not(.cb-off)');
+            
+            const emptyItems = [];
+            cards.forEach(card => {
+                const periodEl = card.querySelector(`.period[data-period="${periode}"]`);
+                if (periodEl && periodEl.classList.contains('empty') && !periodEl.classList.contains('disabled')) {
+                    emptyItems.push({
+                        id: parseInt(card.dataset.id),
+                        name: card.dataset.name
+                    });
+                }
+            });
+            
+            currentBatchPeriode.items = emptyItems;
+            
+            // Fetch pola (gunakan endpoint khusus untuk tegangan)
+            try {
+                const endpoint = type === 'tegangan-trafo' ? 
+                    `/api/data/batch-pattern-tegangan?periode=${periode}&days=7&date=${DATE_STR}` :
+                    `/api/data/batch-pattern?type=${type}&periode=${periode}&days=14&date=${DATE_STR}`;
+                const resp = await fetch(endpoint);
+                const result = await resp.json();
+                if (result.success) {
+                    result.patterns._is_weekend = result.is_target_weekend;
+                    renderBatchPeriodeTable(type, periode, emptyItems, result.patterns);
+                } else {
+                    renderBatchPeriodeTable(type, periode, emptyItems, {});
+                }
+            } catch(e) {
+                renderBatchPeriodeTable(type, periode, emptyItems, {});
+            }
+        }
+
+        function renderBatchPeriodeTable(type, periode, items, patterns) {
+            const isTegangan = type === 'tegangan-trafo';
+            
+            let samplesMax = 0;
+            Object.values(patterns).forEach(p => { if (p.samples > samplesMax) samplesMax = p.samples; });
+            
+            const isWeekend = patterns._is_weekend || false;
+            const dayType = isWeekend ? '🏠 Weekend' : '🏢 Weekday';
+            
+            document.getElementById('patternInfoPeriode').innerHTML = 
+                `📊 Periode <strong>P${String(periode).padStart(2,'0')}:00</strong> | ` +
+                `Pola dari ${samplesMax} data (14 hari) | ${dayType} pattern | ` +
+                `<strong>${items.length}</strong> item akan diinput. ` +
+                `<span style="color:#ffd43b">Edit nilai sebelum simpan.</span>`;
+            
+            if (items.length === 0) {
+                document.getElementById('batchTableWrapper').innerHTML = '<p style="color:#8b9bb4; text-align:center; padding:20px;">Tidak ada item kosong di periode ini.</p>';
+                document.getElementById('batchPeriodeSubmitBtn').style.display = 'none';
+                return;
+            }
+            
+            let html = '<table class="batch-table"><thead><tr><th>Nama</th>';
+            if (isTegangan) {
+                html += '<th>MV (kV)</th><th>HV (kV)</th><th>Referensi</th>';
+            } else {
+                html += '<th>Nilai (A)</th><th>Referensi</th>';
+            }
+            html += '</tr></thead><tbody>';
+            
+            items.forEach(item => {
+                const pData = patterns[String(item.id)] || null;
+                html += `<tr><td style="color:#4dabf7; font-weight:600;">${item.name}</td>`;
+                
+                if (isTegangan) {
+                    const mv = pData ? pData.mv_avg : '';
+                    const hv = pData ? pData.hv_avg : '';
+                    let stats;
+                    if (pData && pData.is_ps) {
+                        stats = `<span style="color:#ffd43b">⚡ ${pData.note}</span>`;
+                    } else {
+                        stats = pData ? `MV avg=${pData.mv_avg} | HV avg=${pData.hv_avg} (${pData.samples}d)` : 'no data';
+                    }
+                    html += `<td><input type="number" step="${pData && pData.is_ps ? '2' : '0.01'}" value="${mv}" id="bp_mv_${item.id}"></td>`;
+                    html += `<td><input type="number" step="0.01" value="${hv}" id="bp_hv_${item.id}"></td>`;
+                    html += `<td class="batch-stats">${stats}</td>`;
+                } else {
+                    const val = pData ? pData.avg : '';
+                    const stats = pData ? `${pData.pattern_type || 'avg'}=${pData.pattern_avg || pData.raw_avg}A (${pData.min}-${pData.max}) ${pData.pattern_samples || pData.samples}d` : 'no data';
+                    html += `<td><input type="number" step="1" value="${val}" id="bp_val_${item.id}"></td>`;
+                    html += `<td class="batch-stats">${stats}</td>`;
+                }
+                html += '</tr>';
+            });
+            
+            html += '</tbody></table>';
+            document.getElementById('batchTableWrapper').innerHTML = html;
+            document.getElementById('batchPeriodeSubmitBtn').style.display = 'inline-block';
+        }
+
+        function closeBatchPeriodeModal() {
+            document.getElementById('batchPeriodeModal').classList.remove('show');
+        }
+
+        async function submitBatchPeriode() {
+            if (!currentBatchPeriode || currentBatchPeriode.periode === null) return;
+            const { type, periode, items } = currentBatchPeriode;
+            const isTegangan = type === 'tegangan-trafo';
+            
+            const itemPayload = [];
+            items.forEach(item => {
+                if (isTegangan) {
+                    const mv = parseFloat(document.getElementById(`bp_mv_${item.id}`).value);
+                    const hv = parseFloat(document.getElementById(`bp_hv_${item.id}`).value);
+                    if (!isNaN(mv) && !isNaN(hv)) {
+                        itemPayload.push({ item_id: item.id, mv, hv });
+                    }
+                } else {
+                    const val = parseFloat(document.getElementById(`bp_val_${item.id}`).value);
+                    if (!isNaN(val) && val >= 0) {
+                        itemPayload.push({ item_id: item.id, value: val });
+                    }
+                }
+            });
+            
+            if (itemPayload.length === 0) {
+                showToast('Isi minimal 1 nilai!', 'error');
+                return;
+            }
+            
+            document.getElementById('batchPeriodeSubmitBtn').disabled = true;
+            document.getElementById('batchPeriodeSubmitBtn').textContent = 'Menyimpan...';
+            
+            try {
+                const resp = await fetch('/api/data/batch-input', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        type, mode: 'per-periode', periode, items: itemPayload, date: DATE_STR
+                    })
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    const success = result.results.filter(r => r.success).length;
+                    const fail = result.results.filter(r => !r.success).length;
+                    let msg = `✓ Batch P${String(periode).padStart(2,'0')}: ${success} berhasil`;
+                    if (fail > 0) msg += `, ${fail} gagal`;
+                    showToast(msg, fail > 0 ? 'error' : 'success');
+                    closeBatchPeriodeModal();
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    showToast('✗ ' + result.message, 'error');
+                }
+            } catch(e) {
+                showToast('Error: ' + e.message, 'error');
+            }
+            
+            document.getElementById('batchPeriodeSubmitBtn').disabled = false;
+            document.getElementById('batchPeriodeSubmitBtn').textContent = 'Simpan Semua';
+        }
+    </script>
+</body>
+</html>
