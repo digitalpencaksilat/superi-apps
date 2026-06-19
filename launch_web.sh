@@ -3,15 +3,17 @@
 # Usage: ./launch_web.sh
 
 cd "$(dirname "$0")"
+PYTHON=".venv/bin/python3"
 
 echo "════════════════════════════════════════════"
 echo "  SUPER-I APP Web Dashboard"
 echo "════════════════════════════════════════════"
 
-# Cek Flask
-if ! python3 -c "import flask" 2>/dev/null; then
-    echo "  Flask belum terinstall. Menginstall..."
-    pip3 install flask --break-system-packages
+# Cek venv ada
+if [ ! -f "$PYTHON" ]; then
+    echo "  ⚠ Virtual env belum ada. Setup dulu:"
+    echo "    python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+    exit 1
 fi
 
 echo "  ✓ Menjalankan web app..."
@@ -22,4 +24,4 @@ echo "════════════════════════�
 # Auto-open browser (macOS)
 sleep 2 && open http://localhost:8888 &
 
-python3 superi_web.py
+$PYTHON superi_web.py

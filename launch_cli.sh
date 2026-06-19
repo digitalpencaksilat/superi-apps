@@ -3,5 +3,13 @@
 # Usage: ./launch_cli.sh
 
 cd "$(dirname "$0")"
+PYTHON=".venv/bin/python3"
 
-python3 superi_app.py
+# Cek venv ada
+if [ ! -f "$PYTHON" ]; then
+    echo "  ⚠ Virtual env belum ada. Setup dulu:"
+    echo "    python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+    exit 1
+fi
+
+$PYTHON superi_app.py
