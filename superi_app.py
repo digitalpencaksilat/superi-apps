@@ -203,7 +203,7 @@ def fetch_history_bulk(token, data_type, gi_id, date_str, days_back=14, _cache={
     return cache
 
 def smart_suggest_from_cache(cache, item_id, periode, target_is_weekend):
-    """Hitung smart suggest dari cache (no API call)."""
+    """Hitung smart suggest dari cache (no API call). Untuk beban penyulang/trafo."""
     if item_id not in cache:
         return None, None
     
@@ -230,6 +230,56 @@ def smart_suggest_from_cache(cache, item_id, periode, target_is_weekend):
         suggested = max(p_min, min(p_max, suggested))
     
     return int(suggested), f"{pattern_type} avg {pattern_avg:.0f}A"
+
+
+def smart_suggest_tegangan_from_cache(cache, item_id, periode, target_is_weekend):
+    """Hitung smart suggest TEGANGAN dari cache (per-periode, weekday/weekend aware).
+    Returns: (mv_suggest, hv_suggest, info_str) atau (None, None, None)
+    """
+    if item_id not in cache:
+        return None, None, None
+    
+    pdata = cache[item_id]["periode_data"].get(periode)
+    if not pdata or not pdata["all"]:
+        return None, None, None
+    
+    all_entries = pdata["all"]
+    if target_is_weekend:
+        pattern_entries = pdata["weekend"] if pdata["weekend"] else all_entries
+        pattern_type = "weekend"
+    else:
+        pattern_entries = pdata["weekday"] if pdata["weekday"] else all_entries
+        pattern_type = "weekday"
+    
+    # Extract MV & HV values
+    all_mv = [e["mv"] for e in all_entries]
+    all_hv = [e["hv"] for e in all_entries]
+    pat_mv = [e["mv"] for e in pattern_entries]
+    pat_hv = [e["hv"] for e in pattern_entries]
+    
+    # MV: rata-rata weighted (50% pattern + 50% base), round 2 desimal
+    base_mv = sum(all_mv) / len(all_mv)
+    pattern_mv = sum(pat_mv) / len(pat_mv)
+    smart_mv = 0.5 * pattern_mv + 0.5 * base_mv
+    smart_mv = round(smart_mv, 2)
+    
+    # Clamp MV ke range historis
+    if pat_mv:
+        smart_mv = max(min(pat_mv), min(max(pat_mv), smart_mv))
+        smart_mv = round(smart_mv, 2)
+    
+    # HV: rata-rata weighted, round integer
+    base_hv = sum(all_hv) / len(all_hv)
+    pattern_hv = sum(pat_hv) / len(pat_hv)
+    smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
+    smart_hv = round(smart_hv)
+    
+    # Clamp HV ke range
+    if pat_hv:
+        smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
+    
+    info = f"{pattern_type} MV={pattern_mv:.2f} HV={pattern_hv:.0f} ({len(pat_mv)}d)"
+    return smart_mv, smart_hv, info
 
 def smart_suggest_value(token, data_type, item_id, periode, date_str, days_back=14):
     """
@@ -851,12 +901,11 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     
     suggestions = {}
     
+    # Fetch history cache untuk SEMUA tipe (termasuk tegangan)
+    print(f"  🧠 Menganalisis pola 14 hari ({day_label})...")
+    cache = fetch_history_bulk(token, data_type, gi_id, date_str)
+    
     if data_type != "tegangan-trafo":
-        print(f"  🧠 Menganalisis pola 14 hari ({day_label})...")
-        
-        # OPTIMIZED: fetch sekali untuk semua item (14 API call, bukan 11×14=154)
-        cache = fetch_history_bulk(token, data_type, gi_id, date_str)
-        
         for it in empty_items:
             val, info = smart_suggest_from_cache(cache, it["id"], per, is_weekend)
             suggestions[it["id"]] = (val, info)
@@ -868,15 +917,13 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     for i, it in enumerate(empty_items, 1):
         nama = it["nama"][:18]
         if data_type == "tegangan-trafo":
-            # Tegangan: ambil dari data existing hari ini (P sebelumnya)
-            entries = it.get(data_key, [])
-            if entries:
-                sorted_e = sorted(entries, key=lambda x: x["periode"])
-                last = sorted_e[-1]
-                print(f"  {i:<4}{nama:<20}MV={last['mv']} HV={last['hv']}  (dari P{last['periode']:02d})")
-                suggestions[it["id"]] = (last["mv"], last["hv"])
+            # Smart suggest tegangan per-periode dari histori (rata-rata, BUKAN copy periode sebelumnya)
+            mv, hv, info = smart_suggest_tegangan_from_cache(cache, it["id"], per, is_weekend)
+            if mv is not None:
+                print(f"  {i:<4}{nama:<20}MV={mv} HV={hv}  {info}")
+                suggestions[it["id"]] = (mv, hv)
             else:
-                print(f"  {i:<4}{nama:<20}?           (tidak ada data)")
+                print(f"  {i:<4}{nama:<20}?           (tidak ada histori)")
                 suggestions[it["id"]] = (None, None)
         else:
             val, info = suggestions.get(it["id"], (None, None))
