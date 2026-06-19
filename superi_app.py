@@ -234,6 +234,12 @@ def smart_suggest_from_cache(cache, item_id, periode, target_is_weekend):
 
 def smart_suggest_tegangan_from_cache(cache, item_id, periode, target_is_weekend):
     """Hitung smart suggest TEGANGAN dari cache (per-periode, weekday/weekend aware).
+    
+    Aturan pembulatan MV per trafo:
+    - TRAFO PS 1 / TRAFO PS 2: bulat (0 desimal, mis. 385, 390)
+    - TRAFO 1: 1 desimal (mis. 20.3, 20.4)
+    - TRAFO 2 / TRAFO 3 / lainnya: 2 desimal (mis. 20.43)
+    
     Returns: (mv_suggest, hv_suggest, info_str) atau (None, None, None)
     """
     if item_id not in cache:
@@ -242,6 +248,16 @@ def smart_suggest_tegangan_from_cache(cache, item_id, periode, target_is_weekend
     pdata = cache[item_id]["periode_data"].get(periode)
     if not pdata or not pdata["all"]:
         return None, None, None
+    
+    nama = cache[item_id].get("name", "").upper()
+    
+    # Tentukan jumlah desimal MV berdasar nama trafo
+    if "PS" in nama:
+        mv_decimals = 0  # TRAFO PS 1/2 → bulat
+    elif nama == "TRAFO 1":
+        mv_decimals = 1  # TRAFO 1 → 1 desimal
+    else:
+        mv_decimals = 2  # default (TRAFO 2/3) → 2 desimal
     
     all_entries = pdata["all"]
     if target_is_weekend:
@@ -257,28 +273,43 @@ def smart_suggest_tegangan_from_cache(cache, item_id, periode, target_is_weekend
     pat_mv = [e["mv"] for e in pattern_entries]
     pat_hv = [e["hv"] for e in pattern_entries]
     
-    # MV: rata-rata weighted (50% pattern + 50% base), round 2 desimal
+    # MV: rata-rata weighted (50% pattern + 50% base), pembulatan per aturan trafo
     base_mv = sum(all_mv) / len(all_mv)
     pattern_mv = sum(pat_mv) / len(pat_mv)
     smart_mv = 0.5 * pattern_mv + 0.5 * base_mv
-    smart_mv = round(smart_mv, 2)
+    smart_mv = round(smart_mv, mv_decimals)
     
-    # Clamp MV ke range historis
+    # Clamp MV ke range histori, lalu round ulang sesuai aturan
     if pat_mv:
         smart_mv = max(min(pat_mv), min(max(pat_mv), smart_mv))
-        smart_mv = round(smart_mv, 2)
+        smart_mv = round(smart_mv, mv_decimals)
     
-    # HV: rata-rata weighted, round integer
-    base_hv = sum(all_hv) / len(all_hv)
-    pattern_hv = sum(pat_hv) / len(pat_hv)
-    smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
-    smart_hv = round(smart_hv)
+    # Kalau 0 desimal, pastikan tipe int
+    if mv_decimals == 0:
+        smart_mv = int(smart_mv)
     
-    # Clamp HV ke range
-    if pat_hv:
-        smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
+    # HV: rata-rata weighted, round integer (untuk TRAFO 1/2/3)
+    # Untuk TRAFO PS, HV justru sisi 20kV (float), pakai 2 desimal
+    if "PS" in nama:
+        # PS: HV adalah sisi MV trafo (~20.x kV), float 2 desimal
+        base_hv = sum(all_hv) / len(all_hv)
+        pattern_hv = sum(pat_hv) / len(pat_hv)
+        smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
+        smart_hv = round(smart_hv, 2)
+        if pat_hv:
+            smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
+            smart_hv = round(smart_hv, 2)
+    else:
+        # Trafo biasa: HV ~150kV, integer
+        base_hv = sum(all_hv) / len(all_hv)
+        pattern_hv = sum(pat_hv) / len(pat_hv)
+        smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
+        smart_hv = round(smart_hv)
+        if pat_hv:
+            smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
+        smart_hv = int(smart_hv)
     
-    info = f"{pattern_type} MV={pattern_mv:.2f} HV={pattern_hv:.0f} ({len(pat_mv)}d)"
+    info = f"{pattern_type} MV={pattern_mv:.2f} HV={pattern_hv:.2f} ({len(pat_mv)}d)"
     return smart_mv, smart_hv, info
 
 def smart_suggest_value(token, data_type, item_id, periode, date_str, days_back=14):
