@@ -23,7 +23,9 @@ BASE_URL = "https://super-i-app.plnes.co.id"
 API_BASE = f"{BASE_URL}/api"
 AUTH_URL = f"{API_BASE}/auth/login-mobile"
 BOUNDARY = "----FormBoundary7MA4YWxkTrZu0gW"
-CONFIG_FILE = os.path.expanduser("~/.superi_config.json")
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".superi_config.json")
+# Fallback: kalau di project folder tidak ada, cek home (~/.superi_config.json)
+_HOME_CONFIG = os.path.expanduser("~/.superi_config.json")
 
 DUMMY_JPEG = bytes([
     0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
@@ -76,12 +78,18 @@ ENDPOINTS = {
 # ============================================================
 
 def load_config():
+    # Prioritas: project folder .superi_config.json
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE) as f:
+            return json.load(f)
+    # Fallback: home ~/.superi_config.json (config lama, sebelum pindah ke project)
+    if os.path.exists(_HOME_CONFIG):
+        with open(_HOME_CONFIG) as f:
             return json.load(f)
     return {}
 
 def save_config(cfg):
+    # Selalu simpan ke project folder (dipakai bersama superi_sync.py)
     with open(CONFIG_FILE, 'w') as f:
         json.dump(cfg, f, indent=2)
 
@@ -505,13 +513,39 @@ def setup_config():
     print(f"  {C['D']}Kredensial akan disimpan di ~/.superi_config.json{C['R']}")
     print(f"  {C['D']}Gardu Induk akan otomatis terdeteksi dari profil.{C['R']}")
     print()
-    nip = input(f"  {C['B']}NIP{C['R']}      : ").strip()
-    password = input(f"  {C['B']}Password{C['R']} : ").strip()
-    
-    config = {"nip": nip, "password": password}
+
+    # --- SUPER-I APP ---
+    print(f"  {C['M']}{C['B']}1. SUPER-I APP{C['R']} {C['D']}(super-i-app.plnes.co.id){C['R']}")
+    nip = input(f"  {C['B']}NIP{C['R']}        : ").strip()
+    password = input(f"  {C['B']}Password{C['R']}   : ").strip()
+    print()
+
+    # --- Portal APD Jakarta ---
+    print(f"  {C['M']}{C['B']}2. Portal APD Jakarta{C['R']} {C['D']}(10.3.187.6/apdjakarta){C['R']}")
+    print(f"  {C['D']}Untuk sinkronisasi data. Kosongkan jika tidak dipakai.{C['R']}")
+    portal_user = input(f"  {C['B']}Username{C['R']}   : ").strip()
+    portal_password = input(f"  {C['B']}Password{C['R']}   : ").strip()
+
+    # Pertahankan config lama (gi_id, portal_url, portal_gi_id) jika ada
+    config = load_config()
+    config["nip"] = nip
+    config["password"] = password
+    if portal_user:
+        config["portal_user"] = portal_user
+    if portal_password:
+        config["portal_password"] = portal_password
+    # Default Portal APD jika belum diset
+    config.setdefault("portal_url", "http://10.3.187.6/apdjakarta")
+    config.setdefault("portal_gi_id", "143")
+    config.setdefault("gi_id", "222")
+
     save_config(config)
     print()
     print(f"  {C['G']}✓ Konfigurasi tersimpan!{C['R']}")
+    if portal_user and portal_password:
+        print(f"  {C['G']}✓ Portal APD siap untuk sinkronisasi{C['R']}")
+    else:
+        print(f"  {C['Y']}⚠ Credentials Portal APD belum lengkap — sync tidak aktif{C['R']}")
     input(f"  {C['D']}[Enter untuk lanjut...]{C['R']}")
 
 def do_login(config):
