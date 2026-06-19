@@ -43,6 +43,11 @@ elif [ "$1" == "sync" ] || [ "$1" == "s" ]; then
     echo "🔄 SUPER-I → Portal APD Sync"
     $PYTHON superi_sync.py "$@"
 
+elif [ "$1" == "auto" ] || [ "$1" == "a" ]; then
+    cd "$SUPERI_DIR"
+    shift
+    $PYTHON superi_auto.py "$@"
+
 else
     echo "SUPER-I APP Launcher"
     echo "===================="

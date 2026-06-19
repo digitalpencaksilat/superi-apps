@@ -72,6 +72,16 @@ if /i "%1"=="i" (
     pause
     goto :end
 )
+if /i "%1"=="auto" (
+    shift
+    "%PYTHON%" superi_auto.py %1 %2 %3 %4 %5 %6 %7 %8 %9
+    goto :end
+)
+if /i "%1"=="a" (
+    shift
+    "%PYTHON%" superi_auto.py %1 %2 %3 %4 %5 %6 %7 %8 %9
+    goto :end
+)
 
 REM Help
 echo.
@@ -86,6 +96,7 @@ echo     ^(tanpa argumen^)   CLI interaktif ^(default - cocok untuk double-click
 echo     cli, c            CLI interaktif
 echo     web, w            Web dashboard ^(http://localhost:8888^)
 echo     sync, s [opts]    Sync data ke Portal APD
+echo     auto, a [opts]    Auto input + sync ^(untuk Task Scheduler^)
 echo     input, i [opts]   Scripting mode
 echo.
 echo   Examples:
