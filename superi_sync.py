@@ -24,6 +24,8 @@ import urllib.error
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+__version__ = "1.0.0"
+
 # ============ PATHS ============
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
@@ -348,7 +350,7 @@ def menu():
     today = datetime.now().strftime("%Y-%m-%d")
     
     while True:
-        header("⚡ SUPER-I → Portal PLN Sync")
+        header(f"⚡ SUPER-I → Portal APD Sync  v{__version__}")
         print(f"  GI       : GI MANGGARAI")
         print(f"  Tanggal  : {today}")
         print()
@@ -411,6 +413,10 @@ def main():
     
     if '--help' in args or '-h' in args:
         print(__doc__)
+        sys.exit(0)
+    
+    if '--version' in args or '-v' in args:
+        print(f"superi sync v{__version__}")
         sys.exit(0)
     
     # Parse args
