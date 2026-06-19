@@ -1,14 +1,14 @@
 # ⚡ SUPER-I APP — Automation Toolkit
 
 <p align="center">
-  <img src="https://img.shields.io/badge/PLN-SUPER--I%20APP-blue?style=for-the-badge&logo=lightning&logoColor=white" alt="SUPER-I APP"/>
+  <img src="https://img.shields.io/badge/SUPER--I%20APP-Automation-blue?style=for-the-badge&logo=lightning&logoColor=white" alt="SUPER-I APP"/>
   <img src="https://img.shields.io/badge/Python-3.8+-green?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.8+"/>
   <img src="https://img.shields.io/badge/Status-Production-success?style=for-the-badge" alt="Production"/>
 </p>
 
 <p align="center">
   <b>Otomasi monitoring & input data realisasi GI 20kV untuk Operator Gardu Induk</b><br>
-  <sub>PT PLN (Persero) UP5 DKI Jakarta dan Banten</sub>
+  <sub>Automation Toolkit untuk Operator Gardu Induk 20kV</sub>
 </p>
 
 ---
@@ -19,7 +19,7 @@ Toolkit CLI untuk mengotomasi pekerjaan rutin operator GI 20kV:
 
 | Fitur | Deskripsi |
 |-------|-----------|
-| 🔄 **Sync Portal PLN** | Sinkronisasi data SUPER-I APP → Portal PLN APD Jakarta (otomatis!) |
+| 🔄 **Sync Portal** | Sinkronisasi data SUPER-I APP → Portal APD Jakarta (otomatis!) |
 | 📊 **Batch Input** | Input beban penyulang, trafo, tegangan per jam (skip manual satu-satu) |
 | 🌐 **Web Dashboard** | Dashboard lokal untuk monitoring & smart-suggest |
 | 💻 **CLI Interaktif** | Menu-driven interface untuk semua operasi |
@@ -57,9 +57,9 @@ chmod +x launcher.sh
 
 ## 📖 Penggunaan
 
-### ⚡ `superi sync` — Sync ke Portal PLN
+### ⚡ `superi sync` — Sync ke Portal APD
 
-**Fitur utama.** Otomatis ambil data dari SUPER-I APP lalu push ke Portal PLN APD Jakarta.
+**Fitur utama.** Otomatis ambil data dari SUPER-I APP lalu push ke Portal APD Jakarta.
 
 ```bash
 # Menu interaktif (pilih tipe → jam → preview → konfirmasi)
@@ -86,7 +86,7 @@ superi sync --type all --jam 09 --date 2026-06-20
 
 **Contoh output:**
 ```
-🔄 SUPER-I → Portal PLN Sync
+🔄 SUPER-I → Portal APD Sync
 
 ============================================================
                     SYNC Beban Penyulang                    
@@ -95,10 +95,10 @@ superi sync --type all --jam 09 --date 2026-06-20
   ✓ SUPER-I login OK
   ℹ SUPER-I APP: Fetching penyulang data...
   ✓ Got 32 items from SUPER-I
-  ℹ Portal PLN: Logging in...
-  ✓ Portal PLN login OK
-  ℹ Portal PLN: Fetching grid...
-  ✓ Got 32 items from Portal PLN
+  ℹ Portal APD: Logging in...
+  ✓ Portal APD login OK
+  ℹ Portal APD: Fetching grid...
+  ✓ Got 32 items from Portal APD
   ℹ Mode: LIVE | Jam: 09-09 | Date: 2026-06-19
 
   [OK] CASABLANCA4 j09=125
@@ -148,13 +148,13 @@ superi input --nip <NIP> --pass <PASSWORD> --list-penyulang --gi 222
 ```
 ┌─────────────────────┐       API (Bearer JWT)       ┌──────────────────────┐
 │   SUPER-I APP       │◄─────────────────────────────►│   superi_sync.py     │
-│   (PLN Server)      │                               │                      │
+│   (Server)          │                               │                      │
 └─────────────────────┘                               │   ┌──────────────┐   │
                                                       │   │  Fetch data  │   │
                                                       │   │  Compare     │   │
                                                       │   │  Update diff │   │
 ┌─────────────────────┐   HTTP Session (CodeIgniter)  │   └──────────────┘   │
-│   Portal PLN        │◄─────────────────────────────►│                      │
+│   Portal APD        │◄─────────────────────────────►│                      │
 │   APD Jakarta       │                               └──────────────────────┘
 └─────────────────────┘
          ▲
@@ -174,7 +174,7 @@ superi input --nip <NIP> --pass <PASSWORD> --list-penyulang --gi 222
 
 ```
 superi-apps/
-├── superi_sync.py              # 🔄 Sync engine (SUPER-I → Portal PLN)
+├── superi_sync.py              # 🔄 Sync engine (SUPER-I → Portal APD)
 ├── superi_app.py               # 💻 CLI interaktif
 ├── superi_web.py               # 🌐 Web dashboard (Flask)
 ├── superi_input.py             # 📊 Scripting mode (input via API)
@@ -240,15 +240,9 @@ export PORTAL_PASSWORD=***
 | Problem | Solusi |
 |---------|--------|
 | Login SUPER-I gagal | Pastikan akun sudah absen masuk (clock-in) di aplikasi mobile |
-| Login Portal PLN gagal | Session cepat expired — script otomatis login ulang tiap run |
+| Login Portal gagal | Session cepat expired — script otomatis login ulang tiap run |
 | TRAFO PS1/PS2 skip | Sudah difix — normalisasi nama handle perbedaan spasi |
-| Portal PLN 500 error | Pastikan format tanggal benar (YYYY-MM-DD) |
-
----
-
-## 📜 License
-
-Internal use — PT PLN (Persero) UP5 DKI Jakarta dan Banten.
+| Portal 500 error | Pastikan format tanggal benar (YYYY-MM-DD) |
 
 ---
 
