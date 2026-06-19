@@ -386,10 +386,41 @@ def smart_suggest_value(token, data_type, item_id, periode, date_str, days_back=
 def clear():
     os.system('clear' if os.name != 'nt' else 'cls')
 
+# Terminal colors
+C = {
+    'R': '\033[0m',      # Reset
+    'B': '\033[1m',      # Bold
+    'D': '\033[2m',      # Dim
+    'G': '\033[92m',     # Green
+    'Y': '\033[93m',     # Yellow
+    'RE': '\033[91m',    # Red
+    'C': '\033[96m',     # Cyan
+    'M': '\033[95m',     # Magenta
+    'W': '\033[97m',     # White
+    'BG': '\033[44m',    # Blue background
+}
+
 def header(title):
-    print("╔" + "═" * 58 + "╗")
-    print(f"║  {title:<54}  ║")
-    print("╚" + "═" * 58 + "╝")
+    w = 60
+    print(f"{C['C']}{'━' * w}")
+    print(f"  {C['B']}{C['W']}{title}{C['R']}")
+    print(f"{C['C']}{'━' * w}{C['R']}")
+
+def sub_header(title):
+    print(f"\n  {C['C']}▸ {C['B']}{title}{C['R']}")
+    print(f"  {C['D']}{'─' * 50}{C['R']}")
+
+def status_bar(user, gi_id, date_str):
+    """Status bar di bawah header."""
+    if user:
+        print(f"  {C['D']}┌─────────────────────────────────────────────────────┐{C['R']}")
+        print(f"  {C['D']}│{C['R']}  {C['G']}●{C['R']} {C['B']}{user['namaLengkap']}{C['R']} {C['D']}({', '.join(user['roles'])}){C['R']}")
+        print(f"  {C['D']}│{C['R']}  📍 GI: {gi_id}  📅 {date_str}")
+        print(f"  {C['D']}└─────────────────────────────────────────────────────┘{C['R']}")
+    else:
+        print(f"  {C['D']}┌─────────────────────────────────────────────────────┐{C['R']}")
+        print(f"  {C['D']}│{C['R']}  {C['RE']}○{C['R']} Belum login  📅 {date_str}")
+        print(f"  {C['D']}└─────────────────────────────────────────────────────┘{C['R']}")
 
 def menu(title, options):
     """Tampilkan menu dan return pilihan user."""
@@ -418,7 +449,7 @@ def input_with_default(prompt, default=""):
     return input(f"  {prompt}: ").strip()
 
 def confirm(msg):
-    return input(f"  {msg} (y/n): ").strip().lower() == 'y'
+    return input(f"  {msg} {C['D']}(y/n){C['R']}: ").strip().lower() == 'y'
 
 # ============================================================
 # WORKFLOW
@@ -427,18 +458,19 @@ def confirm(msg):
 def setup_config():
     """Setup kredensial pertama kali."""
     clear()
-    header("SETUP AWAL")
-    print("  Masukkan kredensial SUPER-I APP (disimpan di ~/.superi_config.json)")
-    print("  Gardu Induk akan otomatis terdeteksi dari profil.")
+    header("⚙  SETUP KREDENSIAL")
     print()
-    nip = input("  NIP: ").strip()
-    password = input("  Password: ").strip()
+    print(f"  {C['D']}Kredensial akan disimpan di ~/.superi_config.json{C['R']}")
+    print(f"  {C['D']}Gardu Induk akan otomatis terdeteksi dari profil.{C['R']}")
+    print()
+    nip = input(f"  {C['B']}NIP{C['R']}      : ").strip()
+    password = input(f"  {C['B']}Password{C['R']} : ").strip()
     
     config = {"nip": nip, "password": password}
     save_config(config)
     print()
-    print("  ✓ Konfigurasi tersimpan!")
-    input("  Tekan Enter untuk lanjut...")
+    print(f"  {C['G']}✓ Konfigurasi tersimpan!{C['R']}")
+    input(f"  {C['D']}[Enter untuk lanjut...]{C['R']}")
 
 def do_login(config):
     """Login, return token, user info, dan gi_id."""
@@ -1202,48 +1234,34 @@ def main():
     
     while True:
         clear()
-        header("SUPER-I APP - Data Input Tool")
-        
-        # Tampilkan status
-        if token and user:
-            print(f"  User: {user['namaLengkap']} | Role: {', '.join(user['roles'])}")
-            print(f"  GI: {gi_id} | Tanggal: {date_str}")
-        else:
-            print(f"  GI: {gi_id} | Tanggal: {date_str}")
-            print(f"  NIP: {config.get('nip', '?')}")
+        header("⚡ SUPER-I APP  ·  Data Input & Sync Tool")
+        status_bar(user, gi_id, date_str)
         print()
-        
-        print("  ═══════════ DATA ═══════════")
-        print("  [1] Lihat Beban Penyulang")
-        print("  [2] Lihat Beban Trafo")
-        print("  [3] Lihat Tegangan Trafo")
+
+        # Menu 2 kolom: LIHAT + INPUT
+        print(f"  {C['M']}{C['B']}LIHAT DATA{C['R']}                    {C['M']}{C['B']}INPUT MANUAL{C['R']}")
+        print(f"  {C['C']}[1]{C['R']} Beban Penyulang        {C['C']}[4]{C['R']} Beban Penyulang")
+        print(f"  {C['C']}[2]{C['R']} Beban Trafo            {C['C']}[5]{C['R']} Beban Trafo")
+        print(f"  {C['C']}[3]{C['R']} Tegangan Trafo         {C['C']}[6]{C['R']} Tegangan Trafo")
         print()
-        print("  ═══════════ INPUT ═══════════")
-        print("  [4] Input Beban Penyulang")
-        print("  [5] Input Beban Trafo")
-        print("  [6] Input Tegangan Trafo")
+
+        # Batch
+        print(f"  {C['Y']}{C['B']}BATCH per ITEM{C['R']}             {C['Y']}{C['B']}BATCH per JAM{C['R']} {C['G']}(+ Sync Portal){C['R']}")
+        print(f"  {C['C']}[7]{C['R']} Beban Penyulang        {C['C']}[A]{C['R']} Beban Penyulang")
+        print(f"  {C['C']}[8]{C['R']} Beban Trafo            {C['C']}[B]{C['R']} Beban Trafo")
+        print(f"  {C['C']}[9]{C['R']} Tegangan Trafo         {C['C']}[C]{C['R']} Tegangan Trafo")
         print()
-        print("  ═══════════ BATCH (per Item) ═══════════")
-        print("  [7] Batch Fill Beban Penyulang")
-        print("  [8] Batch Fill Beban Trafo")
-        print("  [9] Batch Fill Tegangan Trafo")
+
+        # Lain
+        print(f"  {C['D']}{C['B']}PENGATURAN{C['R']}")
+        print(f"  {C['C']}[G]{C['R']} Ganti Tanggal   {C['C']}[L]{C['R']} Login Ulang   {C['C']}[S]{C['R']} Setup   {C['RE']}[0]{C['R']} Keluar")
         print()
-        print("  ═══════════ BATCH (per Periode/Jam) ═══════════")
-        print("  [A] Batch Fill Beban Penyulang per Jam")
-        print("  [B] Batch Fill Beban Trafo per Jam")
-        print("  [C] Batch Fill Tegangan Trafo per Jam")
-        print()
-        print("  ═══════════ LAIN ═══════════")
-        print("  [G] Ganti Tanggal")
-        print("  [L] Login Ulang")
-        print("  [S] Setup Ulang Kredensial")
-        print("  [0] Keluar")
-        print()
-        
-        choice = input("  Pilih > ").strip().lower()
-        
+        print(f"  {C['D']}{'─' * 56}{C['R']}")
+
+        choice = input(f"  {C['B']}Pilih ▸ {C['R']}").strip().lower()
+
         if choice == '0':
-            print("\n  Selamat bekerja!")
+            print(f"\n  {C['G']}✓ Selamat bekerja!{C['R']}\n")
             break
         
         # Login if needed
