@@ -33,51 +33,76 @@ if exist "%SUPERI_DIR%libs" (
 
 cd /d "%SUPERI_DIR%"
 
-if /i "%1"=="cli" (
-    echo.
-    echo   Menjalankan SUPER-I APP CLI...
-    "%PYTHON%" superi_app.py
-) else if /i "%1"=="c" (
-    "%PYTHON%" superi_app.py
-) else if /i "%1"=="web" (
+REM Tanpa argumen (double-click) → langsung buka CLI interaktif
+if "%1"=="" goto :run_cli
+
+if /i "%1"=="cli" goto :run_cli
+if /i "%1"=="c" goto :run_cli
+if /i "%1"=="web" (
     echo.
     echo   Menjalankan Web Dashboard... Buka: http://localhost:8888
     "%PYTHON%" superi_web.py
-) else if /i "%1"=="w" (
+    goto :end
+)
+if /i "%1"=="w" (
     "%PYTHON%" superi_web.py
-) else if /i "%1"=="sync" (
+    goto :end
+)
+if /i "%1"=="sync" (
     shift
     "%PYTHON%" superi_sync.py %1 %2 %3 %4 %5 %6 %7 %8 %9
-) else if /i "%1"=="s" (
+    pause
+    goto :end
+)
+if /i "%1"=="s" (
     shift
     "%PYTHON%" superi_sync.py %1 %2 %3 %4 %5 %6 %7 %8 %9
-) else if /i "%1"=="input" (
+    pause
+    goto :end
+)
+if /i "%1"=="input" (
     shift
     "%PYTHON%" superi_input.py %1 %2 %3 %4 %5 %6 %7 %8 %9
-) else if /i "%1"=="i" (
+    pause
+    goto :end
+)
+if /i "%1"=="i" (
     shift
     "%PYTHON%" superi_input.py %1 %2 %3 %4 %5 %6 %7 %8 %9
-) else (
-    echo.
-    echo   ============================================
-    echo     SUPER-I APP Launcher ^(Windows^)
-    echo   ============================================
-    echo.
-    echo   Usage: superi [command] [options]
-    echo.
-    echo   Commands:
-    echo     cli, c            CLI interaktif
-    echo     web, w            Web dashboard ^(http://localhost:8888^)
-    echo     sync, s [opts]    Sync data ke Portal APD
-    echo     input, i [opts]   Scripting mode
-    echo.
-    echo   Examples:
-    echo     superi cli
-    echo     superi sync --type all --jam 09
-    echo     superi sync --type penyulang --jam 08-10 --dry-run
-    echo.
-    echo   Project: %SUPERI_DIR%
-    echo.
+    pause
+    goto :end
 )
 
+REM Help
+echo.
+echo   ============================================
+echo     SUPER-I APP Launcher ^(Windows^)
+echo   ============================================
+echo.
+echo   Usage: superi [command] [options]
+echo.
+echo   Commands:
+echo     ^(tanpa argumen^)   CLI interaktif ^(default - cocok untuk double-click^)
+echo     cli, c            CLI interaktif
+echo     web, w            Web dashboard ^(http://localhost:8888^)
+echo     sync, s [opts]    Sync data ke Portal APD
+echo     input, i [opts]   Scripting mode
+echo.
+echo   Examples:
+echo     superi cli
+echo     superi sync --type all --jam 09
+echo     superi sync --type penyulang --jam 08-10 --dry-run
+echo.
+echo   Project: %SUPERI_DIR%
+echo.
+pause
+goto :end
+
+:run_cli
+echo.
+echo   Menjalankan SUPER-I APP CLI...
+"%PYTHON%" superi_app.py
+goto :end
+
+:end
 endlocal
