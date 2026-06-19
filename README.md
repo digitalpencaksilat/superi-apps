@@ -29,7 +29,7 @@ Toolkit CLI untuk mengotomasi pekerjaan rutin operator GI 20kV:
 
 ## 🚀 Quick Start
 
-### 1. Clone & Setup
+### macOS / Linux
 
 ```bash
 git clone https://github.com/digitalpencaksilat/superi-apps.git
@@ -37,22 +37,54 @@ cd superi-apps
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+
+# Setup credentials lewat menu interaktif
+.venv/bin/python3 superi_app.py    # → pilih [S] Setup
 ```
 
-### 2. Konfigurasi
-
+Pasang launcher global (opsional, supaya bisa panggil `superi` dari mana saja):
 ```bash
-cp .superi_config.example.json .superi_config.json
-# Edit .superi_config.json → isi NIP, password, dll
-```
-
-### 3. Install Launcher (opsional, supaya bisa panggil `superi` dari mana saja)
-
-```bash
-# Buat symlink ke /usr/local/bin
-sudo ln -sf "$(pwd)/launcher.sh" /usr/local/bin/superi
 chmod +x launcher.sh
+sudo ln -sf "$(pwd)/launcher.sh" /usr/local/bin/superi
 ```
+
+### 🪟 Windows (Portable, tanpa install, tanpa admin)
+
+Cocok untuk komputer kantor yang tidak punya akses install aplikasi.
+
+1. **Download project** (zip dari GitHub atau pakai Git Bash kalau ada)
+   - https://github.com/digitalpencaksilat/superi-apps → tombol `Code` → `Download ZIP`
+   - Extract ke folder mana saja, mis. `C:\superi-apps\` atau bahkan Desktop
+
+2. **Jalankan setup** (sekali saja)
+   ```cmd
+   setup_windows.bat
+   ```
+   Script ini otomatis:
+   - Download Python 3.11 portable (~10 MB) ke folder `python\`
+   - Install pip
+   - Install dependencies (requests, flask, beautifulsoup4)
+   - Buat `.superi_config.json` dari template
+   
+   **Tidak butuh admin, tidak install ke system, tidak ubah PATH.**
+
+3. **Setup credentials**
+   ```cmd
+   superi.bat cli
+   ```
+   Pilih `[S] Setup` di menu, isi NIP+password SUPER-I dan Portal APD.
+
+4. **Pakai**
+   ```cmd
+   superi.bat cli                              :: CLI interaktif
+   superi.bat sync --type all --jam 09         :: Sync semua tipe jam 09
+   superi.bat web                              :: Web dashboard
+   ```
+
+**Tips Windows:**
+- Klik kanan `superi.bat` → **Send to → Desktop (create shortcut)** untuk akses cepat
+- Pakai **Windows Terminal** (gratis di Microsoft Store) biar warna & emoji tampil rapi
+- Tambahkan folder project ke `PATH` (Settings → Environment Variables → Path → New) supaya bisa panggil `superi cli` dari mana saja tanpa `cd`
 
 ---
 
@@ -183,8 +215,11 @@ superi-apps/
 ├── .superi_config.json         # ⚙️ Credentials (gitignored!)
 ├── .superi_config.example.json # 📋 Template config
 ├── requirements.txt            # Dependencies
-├── launch_cli.sh               # Launcher CLI
-├── launch_web.sh               # Launcher Web
+├── launcher.sh                 # 🍎 Launcher universal (macOS/Linux)
+├── launch_cli.sh               # Launcher CLI (macOS/Linux)
+├── launch_web.sh               # Launcher Web (macOS/Linux)
+├── superi.bat                  # 🪟 Launcher Windows
+├── setup_windows.bat           # 🪟 Setup portable Windows (Python + deps)
 └── README.md                   # Dokumentasi ini
 ```
 
