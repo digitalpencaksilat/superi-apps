@@ -728,6 +728,57 @@ def input_single(token, data_type, gi_id, date_str, user_info):
     print()
     input("  Tekan Enter untuk kembali...")
 
+def offer_portal_sync(data_type, periodes, date_str):
+    """Tanya operator apakah mau sync ke Portal PLN setelah batch fill sukses.
+    
+    Args:
+        data_type: "beban-penyulang" | "beban-trafo" | "tegangan-trafo"
+        periodes: list of int (jam-jam yang baru saja diinput, mis. [9] atau [9,10,11])
+        date_str: "YYYY-MM-DD"
+    """
+    print()
+    print(f"  {'─' * 55}")
+    ans = input("  🔄 Sync data ini ke Portal PLN sekarang? (y/N): ").strip().lower()
+    if ans != 'y':
+        print("  ℹ Lewatkan sync. Bisa di-sync nanti dengan: superi sync")
+        return
+    
+    # Map type ke format superi_sync (--type)
+    sync_type_map = {
+        "beban-penyulang": "penyulang",
+        "beban-trafo": "trafo",
+        "tegangan-trafo": "tegangan",
+    }
+    sync_type = sync_type_map[data_type]
+    
+    # Cek credentials Portal PLN
+    try:
+        import superi_sync
+    except ImportError as e:
+        print(f"  ✗ Modul superi_sync tidak ditemukan: {e}")
+        return
+    
+    if not superi_sync.PORTAL_USER or not superi_sync.PORTAL_PASS:
+        print("  ✗ Credentials Portal PLN belum diset di .superi_config.json")
+        print("    Tambahkan: portal_user, portal_password")
+        return
+    
+    # Tentukan rentang jam (kalau periodes berdekatan, pakai start-end; kalau tidak, sync satu-satu)
+    print(f"\n  🔄 Menjalankan sync ke Portal PLN...")
+    sorted_p = sorted(periodes)
+    
+    # Sync per jam (lebih aman, output jelas)
+    all_ok = True
+    for p in sorted_p:
+        ok = superi_sync.do_sync(sync_type, p, p, date_str, dry_run=False)
+        if not ok:
+            all_ok = False
+    
+    if all_ok:
+        print(f"\n  ✓ Sync ke Portal PLN selesai untuk {len(sorted_p)} jam")
+    else:
+        print(f"\n  ⚠ Sebagian sync gagal — cek log di atas")
+
 def batch_fill(token, data_type, gi_id, date_str, user_info):
     """Isi semua periode kosong untuk satu item."""
     ep = ENDPOINTS[data_type]
@@ -789,18 +840,86 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
     print(f"  Periode: {empty_periods}")
     
     if data_type == "tegangan-trafo":
-        # Tegangan: tetap pakai logic lama
-        if entries:
-            print(f"    → Saran dari P{last_entry['periode']:02d}: MV={last_mv}kV, HV={last_hv}kV")
-            mv_str = input(f"  MV (kV) [P{last_entry['periode']:02d}: {last_mv}]: ").strip()
-            mv = float(mv_str) if mv_str else last_mv
-            hv_str = input(f"  HV (kV) [P{last_entry['periode']:02d}: {last_hv}]: ").strip()
-            hv = float(hv_str) if hv_str else last_hv
-        else:
-            mv_str = input(f"  MV (kV): ").strip()
-            mv = float(mv_str)
-            hv_str = input(f"  HV (kV): ").strip()
-            hv = float(hv_str)
+        # Tegangan: SMART SUGGEST per-periode (rata-rata histori, bukan copy periode sebelumnya)
+        today = datetime.strptime(date_str, "%Y-%m-%d")
+        is_weekend = today.weekday() >= 5
+        day_label = "Weekend" if is_weekend else "Weekday"
+        
+        print(f"    🧠 Menganalisis pola 14 hari ({day_label})...")
+        cache = fetch_history_bulk(token, data_type, gi_id, date_str)
+        
+        # Hitung suggest per-periode
+        teg_suggestions = {}
+        for per in empty_periods:
+            mv, hv, info = smart_suggest_tegangan_from_cache(cache, item["id"], per, is_weekend)
+            teg_suggestions[per] = (mv, hv, info)
+        
+        # Tampilkan tabel
+        print(f"\n  {'Periode':<10}{'MV':>8}{'HV':>8}  {'Info'}")
+        print(f"  {'─' * 55}")
+        for per in empty_periods:
+            mv, hv, info = teg_suggestions[per]
+            if mv is not None:
+                print(f"  P{per:02d}       {mv:>8}{hv:>8}  {info}")
+            else:
+                print(f"  P{per:02d}       {'?':>8}{'?':>8}  (tidak ada histori)")
+        
+        # Edit?
+        edit = input("\n  Edit nilai? (y/N): ").strip().lower()
+        if edit == 'y':
+            for per in empty_periods:
+                mv_cur, hv_cur, _ = teg_suggestions[per]
+                mv_str = input(f"  P{per:02d} MV [{mv_cur}]: ").strip()
+                hv_str = input(f"  P{per:02d} HV [{hv_cur}]: ").strip()
+                teg_suggestions[per] = (
+                    float(mv_str) if mv_str else mv_cur,
+                    float(hv_str) if hv_str else hv_cur,
+                    "edited"
+                )
+        
+        # Filter valid
+        valid_periods = [p for p in empty_periods if teg_suggestions[p][0] is not None]
+        if not valid_periods:
+            print("  ✗ Tidak ada nilai valid!")
+            input("  Tekan Enter...")
+            return
+        
+        if not confirm(f"\n  Isi {len(valid_periods)} periode tegangan {item['nama']}?"):
+            return
+        
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        success = 0
+        for per in valid_periods:
+            mv, hv, _ = teg_suggestions[per]
+            data_dict = {
+                ep["id_field"]: item["id"],
+                "timezone": "Asia/Jakarta",
+                "periode": per,
+                "tanggal": dt.day,
+                "bulan": dt.month - 1,
+                "tahun": dt.year,
+                "durasi": 0.1,
+                ep["value_field"]: mv,
+                "hv": hv,
+                "fotoHV": {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+                "fotoMV": {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+            }
+            status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
+            if result.get("success"):
+                success += 1
+                print(f"    P{per:02d} ✓ MV={mv} HV={hv}")
+            else:
+                msg = result.get("message", "?")
+                print(f"    P{per:02d} ✗ ({msg[:50]})")
+        
+        print(f"\n  ✓ {success}/{len(valid_periods)} berhasil!")
+        
+        # Tawarkan sync ke Portal PLN
+        if success > 0:
+            offer_portal_sync(data_type, valid_periods, date_str)
+        
+        input("  Tekan Enter...")
+        return
     else:
         # Beban: SMART SUGGEST untuk satu nilai yang dipakai di semua periode kosong
         # Pakai periode pertama kosong sebagai referensi
@@ -851,6 +970,11 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
             print(f"    P{per:02d} ✗ ({msg[:50]})")
     
     print(f"\n  ✓ {success}/{len(empty_periods)} berhasil!")
+    
+    # Tawarkan sync ke Portal PLN
+    if success > 0:
+        offer_portal_sync(data_type, empty_periods, date_str)
+    
     input("  Tekan Enter...")
 
 # ============================================================
@@ -1052,6 +1176,11 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     
     print(f"\n  ═══════════════════════════════")
     print(f"  ✓ Berhasil: {success} | ✗ Gagal: {fail}")
+    
+    # Tawarkan sync ke Portal PLN (periode tunggal: per)
+    if success > 0:
+        offer_portal_sync(data_type, [per], date_str)
+    
     input("  Tekan Enter...")
 
 def main():
