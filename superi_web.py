@@ -73,6 +73,30 @@ def api_get(token, path, params=None):
     except Exception as e:
         return {"error": str(e)}
 
+def _teg_mv_decimals(name: str) -> int:
+    """Aturan pembulatan MV tegangan per trafo (parity dengan superi_app.py).
+    
+    - TRAFO PS 1 / TRAFO PS 2 → 0 desimal (bulat: 385, 390)
+    - TRAFO 1                → 1 desimal (20.3, 20.4)
+    - TRAFO 2 / 3 / lainnya  → 2 desimal (20.43)
+    """
+    n = (name or "").upper()
+    if "PS" in n:
+        return 0
+    if n == "TRAFO 1":
+        return 1
+    return 2
+
+
+def _round_mv(name: str, mv_avg: float):
+    """Bulatkan MV sesuai aturan trafo. Return int kalau 0 desimal, float kalau lain."""
+    decimals = _teg_mv_decimals(name)
+    rounded = round(mv_avg, decimals)
+    if decimals == 0:
+        return int(rounded)
+    return rounded
+
+
 def learn_pattern(token, gi_id, data_type, item_id, days_back=7):
     """
     Belajar pola beban per periode dari data historis.
@@ -89,6 +113,7 @@ def learn_pattern(token, gi_id, data_type, item_id, days_back=7):
     
     today = datetime.now()
     pattern = defaultdict(lambda: {"values": [], "mv_values": [], "hv_values": []})
+    item_name = ""
     
     for offset in range(1, days_back + 1):
         date_str = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
@@ -98,6 +123,8 @@ def learn_pattern(token, gi_id, data_type, item_id, days_back=7):
         for it in items:
             if it["id"] != item_id:
                 continue
+            if not item_name:
+                item_name = it.get("nama", "")
             if data_type == "tegangan-trafo":
                 for e in it.get("tegangan", []):
                     pattern[e["periode"]]["mv_values"].append(e["mv"])
@@ -113,10 +140,19 @@ def learn_pattern(token, gi_id, data_type, item_id, days_back=7):
             mvs = data["mv_values"]
             hvs = data["hv_values"]
             if mvs:
+                mv_avg_raw = sum(mvs) / len(mvs)
+                hv_avg_raw = sum(hvs) / len(hvs)
+                # Aturan pembulatan
+                mv_rounded = _round_mv(item_name, mv_avg_raw)
+                # HV: untuk PS pakai 2 desimal (sisi 20kV), lainnya integer (~150kV)
+                if "PS" in (item_name or "").upper():
+                    hv_rounded = round(hv_avg_raw, 2)
+                else:
+                    hv_rounded = int(round(hv_avg_raw))
                 result[periode] = {
-                    "mv_avg": round(sum(mvs)/len(mvs), 2),
+                    "mv_avg": mv_rounded,
                     "mv_min": min(mvs), "mv_max": max(mvs),
-                    "hv_avg": round(sum(hvs)/len(hvs)),
+                    "hv_avg": hv_rounded,
                     "hv_min": min(hvs), "hv_max": max(hvs),
                     "samples": len(mvs)
                 }
@@ -629,6 +665,7 @@ def api_batch_pattern():
         "mv_weekday": [], "mv_weekend": [],
         "hv_weekday": [], "hv_weekend": [],
     })
+    item_names = {}  # id → nama trafo (untuk aturan pembulatan MV)
     
     with ThreadPoolExecutor(max_workers=8) as executor:
         results_list = list(executor.map(fetch_day, range(1, days + 1)))
@@ -636,6 +673,8 @@ def api_batch_pattern():
     for offset, d, d_is_weekend, result in results_list:
         items = result.get("data", {}).get("items", [])
         for it in items:
+            # Simpan nama untuk aturan pembulatan MV
+            item_names[it["id"]] = it.get("nama", "")
             if data_type == "tegangan-trafo":
                 for e in it.get("tegangan", []):
                     if e["periode"] == periode:
@@ -665,9 +704,19 @@ def api_batch_pattern():
         if data_type == "tegangan-trafo":
             mvs = data["mv_values"]
             if mvs:
+                nama = item_names.get(item_id, "")
+                mv_avg_raw = sum(mvs) / len(mvs)
+                hv_avg_raw = sum(data["hv_values"]) / len(data["hv_values"])
+                # Aturan pembulatan MV per trafo
+                mv_rounded = _round_mv(nama, mv_avg_raw)
+                # HV: PS pakai 2 desimal (sisi 20kV), lainnya integer
+                if "PS" in nama.upper():
+                    hv_rounded = round(hv_avg_raw, 2)
+                else:
+                    hv_rounded = int(round(hv_avg_raw))
                 patterns[str(item_id)] = {
-                    "mv_avg": round(sum(mvs)/len(mvs), 2),
-                    "hv_avg": round(sum(data["hv_values"])/len(data["hv_values"])),
+                    "mv_avg": mv_rounded,
+                    "hv_avg": hv_rounded,
                     "samples": len(mvs)
                 }
         else:
@@ -737,6 +786,7 @@ def api_batch_pattern_tegangan():
     path = "/gama/opgi-20kv/operator-gi/tegangan-trafo"
     today = datetime.strptime(date_str, "%Y-%m-%d")
     item_patterns = defaultdict(lambda: {"mv_values": [], "hv_values": []})
+    item_names = {}  # id → nama trafo (untuk aturan pembulatan MV)
     
     from concurrent.futures import ThreadPoolExecutor
     
@@ -750,6 +800,7 @@ def api_batch_pattern_tegangan():
     for result in results_list:
         items = result.get("data", {}).get("items", [])
         for it in items:
+            item_names[it["id"]] = it.get("nama", "")
             for e in it.get("tegangan", []):
                 if e["periode"] == periode:
                     item_patterns[it["id"]]["mv_values"].append(e["mv"])
@@ -758,16 +809,19 @@ def api_batch_pattern_tegangan():
     patterns = {}
     for item_id, data in item_patterns.items():
         if data["mv_values"]:
+            nama = item_names.get(item_id, "")
             mv_avg = sum(data["mv_values"]) / len(data["mv_values"])
             hv_avg = sum(data["hv_values"]) / len(data["hv_values"])
             
             if item_id in PS_RULES:
-                # PS trafo: MV genap bulat, HV dari MV trafo sumber
-                mv_rounded = round(mv_avg / 2) * 2  # genap
+                # PS trafo: MV pembulatan ke integer (parity dengan CLI), HV dari MV trafo sumber
+                mv_rounded = _round_mv(nama, mv_avg)  # PS → 0 desimal (int)
                 source_id = PS_RULES[item_id]["hv_source"]
                 source_data = item_patterns.get(source_id, {"mv_values": []})
                 if source_data["mv_values"]:
-                    hv_from_source = round(sum(source_data["mv_values"]) / len(source_data["mv_values"]), 2)
+                    # HV PS = rata-rata MV trafo sumber, dibulatkan sesuai aturan trafo sumber
+                    source_name = item_names.get(source_id, "")
+                    hv_from_source = _round_mv(source_name, sum(source_data["mv_values"]) / len(source_data["mv_values"]))
                 else:
                     hv_from_source = round(hv_avg, 2)
                 
@@ -777,12 +831,14 @@ def api_batch_pattern_tegangan():
                     "samples": len(data["mv_values"]),
                     "is_ps": True,
                     "hv_source_name": "TRAFO 1" if source_id == 22241 else "TRAFO 3",
-                    "note": f"HV=MV {patterns.get(str(source_id), {}).get('note', 'TRAFO sumber')}, MV genap"
+                    "note": f"HV=MV {patterns.get(str(source_id), {}).get('note', 'TRAFO sumber')}, MV bulat"
                 }
             else:
+                # TRAFO 1/2/3: aturan pembulatan per nama
+                mv_rounded = _round_mv(nama, mv_avg)
                 patterns[str(item_id)] = {
-                    "mv_avg": round(mv_avg, 2),
-                    "hv_avg": round(hv_avg),
+                    "mv_avg": mv_rounded,
+                    "hv_avg": int(round(hv_avg)),
                     "samples": len(data["mv_values"]),
                     "is_ps": False
                 }
@@ -797,6 +853,42 @@ def api_batch_pattern_tegangan():
             pdata["note"] = f"HV={source_mv}kV (dari MV {source_name}), MV genap bulat"
     
     return jsonify({"success": True, "patterns": patterns})
+
+@app.route("/api/data/sync-portal", methods=["POST"])
+@login_required
+def api_sync_portal():
+    """API endpoint: sync data ke Portal PLN APD Jakarta setelah batch fill."""
+    data = request.get_json()
+    data_type = data.get("type")  # beban-penyulang, beban-trafo, tegangan-trafo
+    periodes = data.get("periodes", [])  # list of int
+    date_str = data.get("date", datetime.now().strftime("%Y-%m-%d"))
+    
+    # Map type
+    sync_type_map = {
+        "beban-penyulang": "penyulang",
+        "beban-trafo": "trafo",
+        "tegangan-trafo": "tegangan",
+    }
+    sync_type = sync_type_map.get(data_type)
+    if not sync_type or not periodes:
+        return jsonify({"success": False, "message": "Missing type or periodes"})
+    
+    try:
+        import superi_sync
+        if not superi_sync.PORTAL_USER or not superi_sync.PORTAL_PASS:
+            return jsonify({"success": False, "message": "Portal PLN credentials belum diset di .superi_config.json"})
+        
+        results = []
+        for p in sorted(periodes):
+            ok = superi_sync.do_sync(sync_type, p, p, date_str, dry_run=False)
+            results.append({"periode": p, "success": ok})
+        
+        all_ok = all(r["success"] for r in results)
+        return jsonify({"success": all_ok, "results": results, "message": f"Sync {len(periodes)} periode {'berhasil' if all_ok else 'sebagian gagal'}"})
+    except ImportError:
+        return jsonify({"success": False, "message": "Module superi_sync tidak tersedia"})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
 
 if __name__ == "__main__":
     import subprocess

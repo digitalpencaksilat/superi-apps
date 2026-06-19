@@ -1011,6 +1011,11 @@
                     if (fail > 0) msg += `, ${fail} gagal`;
                     showToast(msg, fail > 0 ? 'error' : 'success');
                     closeBatchModal();
+                    // Tawarkan sync ke Portal PLN
+                    if (success > 0) {
+                        const syncPeriodes = periods.map(p => p.periode);
+                        await offerPortalSync(type, syncPeriodes);
+                    }
                     setTimeout(() => location.reload(), 1500);
                 } else {
                     showToast('✗ ' + result.message, 'error');
@@ -1021,6 +1026,32 @@
 
             document.getElementById('batchSubmitBtn').disabled = false;
             document.getElementById('batchSubmitBtn').textContent = 'Simpan Semua';
+        }
+
+        // ===== SYNC KE PORTAL PLN =====
+        async function offerPortalSync(type, periodes) {
+            const jamLabel = periodes.map(p => 'P' + String(p).padStart(2,'0')).join(', ');
+            const ok = confirm(`Sinkronkan data ${jamLabel} ke Portal PLN APD Jakarta sekarang?`);
+            if (!ok) return;
+            
+            showToast('🔄 Sync ke Portal PLN...', 'success');
+            try {
+                const resp = await fetch('/api/data/sync-portal', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ type, periodes, date: DATE_STR })
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    showToast('✓ Sync Portal PLN berhasil: ' + result.message, 'success');
+                } else {
+                    showToast('⚠ Portal PLN: ' + (result.message || 'sebagian gagal'), 'error');
+                }
+            } catch(e) {
+                showToast('✗ Sync Portal error: ' + e.message, 'error');
+            }
+            // beri waktu toast terbaca sebelum reload
+            await new Promise(r => setTimeout(r, 1800));
         }
 
         // ===== BATCH PER PERIODE (per jam) =====
@@ -1225,6 +1256,10 @@
                     if (fail > 0) msg += `, ${fail} gagal`;
                     showToast(msg, fail > 0 ? 'error' : 'success');
                     closeBatchPeriodeModal();
+                    // Tawarkan sync ke Portal PLN
+                    if (success > 0) {
+                        await offerPortalSync(type, [periode]);
+                    }
                     setTimeout(() => location.reload(), 1500);
                 } else {
                     showToast('✗ ' + result.message, 'error');
