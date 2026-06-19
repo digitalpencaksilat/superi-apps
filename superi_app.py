@@ -14,6 +14,8 @@ import json
 import os
 import sys
 import base64
+import subprocess
+import platform
 from datetime import datetime
 
 # ============================================================
@@ -24,6 +26,7 @@ API_BASE = f"{BASE_URL}/api"
 AUTH_URL = f"{API_BASE}/auth/login-mobile"
 BOUNDARY = "----FormBoundary7MA4YWxkTrZu0gW"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".superi_config.json")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Fallback: kalau di project folder tidak ada, cek home (~/.superi_config.json)
 _HOME_CONFIG = os.path.expanduser("~/.superi_config.json")
 
@@ -1291,6 +1294,145 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     
     input(f"  {C['D']}[Enter]{C['R']}")
 
+CRON_MARKER = "# SUPER-I-AUTO"
+
+def _cron_command():
+    """Baris cron untuk auto mode."""
+    py = os.path.join(SCRIPT_DIR, ".venv", "bin", "python3")
+    script = os.path.join(SCRIPT_DIR, "superi_auto.py")
+    log = os.path.join(SCRIPT_DIR, "auto_log.txt")
+    # Fallback kalau venv tidak ada
+    if not os.path.exists(py):
+        py = sys.executable
+    return f"5 * * * * {py} {script} >> {log} 2>&1 {CRON_MARKER}"
+
+def cron_is_installed():
+    """Cek apakah cron job sudah terpasang."""
+    try:
+        result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+        return CRON_MARKER in result.stdout
+    except Exception:
+        return False
+
+def cron_install():
+    """Pasang cron job (macOS/Linux)."""
+    try:
+        # Ambil crontab existing
+        result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+        existing = result.stdout if result.returncode == 0 else ""
+        # Hapus baris lama SUPER-I-AUTO kalau ada
+        lines = [l for l in existing.splitlines() if CRON_MARKER not in l]
+        lines.append(_cron_command())
+        new_crontab = "\n".join(lines) + "\n"
+        # Tulis balik
+        proc = subprocess.run(["crontab", "-"], input=new_crontab, text=True, capture_output=True)
+        return proc.returncode == 0, proc.stderr
+    except Exception as e:
+        return False, str(e)
+
+def cron_uninstall():
+    """Hapus cron job."""
+    try:
+        result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+        if result.returncode != 0:
+            return True, ""  # tidak ada crontab
+        lines = [l for l in result.stdout.splitlines() if CRON_MARKER not in l]
+        new_crontab = ("\n".join(lines) + "\n") if lines else ""
+        proc = subprocess.run(["crontab", "-"], input=new_crontab, text=True, capture_output=True)
+        return proc.returncode == 0, proc.stderr
+    except Exception as e:
+        return False, str(e)
+
+# --- Windows Task Scheduler ---
+WIN_TASK_NAME = "SUPER-I-Auto-Input"
+
+def win_task_is_installed():
+    try:
+        result = subprocess.run(["schtasks", "/query", "/tn", WIN_TASK_NAME],
+                                capture_output=True, text=True)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+def win_task_install():
+    """Pasang Windows Task Scheduler (tiap jam)."""
+    bat = os.path.join(SCRIPT_DIR, "superi.bat")
+    try:
+        # /sc hourly = tiap jam; /tr = command; /f = force overwrite
+        proc = subprocess.run([
+            "schtasks", "/create", "/tn", WIN_TASK_NAME,
+            "/tr", f'"{bat}" auto',
+            "/sc", "hourly",
+            "/f"
+        ], capture_output=True, text=True)
+        return proc.returncode == 0, proc.stderr or proc.stdout
+    except Exception as e:
+        return False, str(e)
+
+def win_task_uninstall():
+    try:
+        proc = subprocess.run(["schtasks", "/delete", "/tn", WIN_TASK_NAME, "/f"],
+                              capture_output=True, text=True)
+        return proc.returncode == 0, proc.stderr or proc.stdout
+    except Exception as e:
+        return False, str(e)
+
+def scheduler_is_installed():
+    """Cek apakah scheduler (cron/task) sudah terpasang sesuai OS."""
+    if platform.system() == "Windows":
+        return win_task_is_installed()
+    return cron_is_installed()
+
+def scheduler_install_menu():
+    """Menu install/hapus jadwal otomatis sesuai OS."""
+    is_win = platform.system() == "Windows"
+    os_name = "Windows Task Scheduler" if is_win else "cron"
+    installed = scheduler_is_installed()
+    
+    clear()
+    header(f"⚙  JADWAL OTOMATIS · {os_name}")
+    print()
+    if installed:
+        print(f"  {C['G']}● Jadwal otomatis SUDAH terpasang{C['R']}")
+        print(f"  {C['D']}Sistem akan memanggil auto mode tiap jam.{C['R']}")
+    else:
+        print(f"  {C['RE']}○ Jadwal otomatis BELUM terpasang{C['R']}")
+    print()
+    print(f"  {C['C']}[1]{C['R']} {'Pasang ulang' if installed else 'Pasang'} jadwal otomatis")
+    if installed:
+        print(f"  {C['C']}[2]{C['R']} {C['RE']}Hapus{C['R']} jadwal otomatis")
+    print(f"  {C['RE']}[0]{C['R']} Kembali")
+    print()
+    print(f"  {C['D']}{'─' * 56}{C['R']}")
+    choice = input(f"  {C['B']}Pilih ▸ {C['R']}").strip()
+    
+    if choice == '1':
+        print(f"\n  {C['Y']}Memasang jadwal...{C['R']}")
+        if is_win:
+            ok, msg = win_task_install()
+        else:
+            ok, msg = cron_install()
+        if ok:
+            print(f"  {C['G']}✓ Jadwal otomatis terpasang!{C['R']}")
+            print(f"  {C['D']}Sistem akan jalankan auto mode tiap jam (menit ke-5).{C['R']}")
+            print(f"  {C['D']}Pastikan Auto Mode AKTIF + komputer menyala di window jam.{C['R']}")
+        else:
+            print(f"  {C['RE']}✗ Gagal: {msg}{C['R']}")
+            if not is_win:
+                print(f"  {C['D']}Di macOS, Terminal mungkin perlu izin 'Full Disk Access' di System Settings.{C['R']}")
+        input(f"\n  {C['D']}[Enter]{C['R']}")
+    elif choice == '2' and installed:
+        print(f"\n  {C['Y']}Menghapus jadwal...{C['R']}")
+        if is_win:
+            ok, msg = win_task_uninstall()
+        else:
+            ok, msg = cron_uninstall()
+        if ok:
+            print(f"  {C['G']}✓ Jadwal otomatis dihapus{C['R']}")
+        else:
+            print(f"  {C['RE']}✗ Gagal: {msg}{C['R']}")
+        input(f"\n  {C['D']}[Enter]{C['R']}")
+
 def auto_mode_menu():
     """Menu pengaturan Auto Mode (input + sync terjadwal)."""
     while True:
@@ -1327,7 +1469,10 @@ def auto_mode_menu():
         print(f"  {C['C']}[6]{C['R']} 📜 Lihat Log Aktivitas")
         print()
         print(f"  {C['M']}{C['B']}SETUP TERJADWAL{C['R']}")
-        print(f"  {C['C']}[7]{C['R']} 📖 Tampilkan panduan cron / Task Scheduler")
+        _sched_on = scheduler_is_installed()
+        _sched_badge = f"{C['G']}TERPASANG{C['R']}" if _sched_on else f"{C['RE']}BELUM{C['R']}"
+        print(f"  {C['C']}[7]{C['R']} ⚙  Pasang/Hapus Jadwal Otomatis [{_sched_badge}]")
+        print(f"  {C['C']}[8]{C['R']} 📖 Panduan manual cron / Task Scheduler")
         print()
         print(f"  {C['RE']}[0]{C['R']} Kembali ke menu utama")
         print()
@@ -1408,6 +1553,8 @@ def auto_mode_menu():
                 print(f"\n  {C['Y']}⚠ Belum ada log. Jalankan test dulu (menu 5).{C['R']}")
             input(f"\n  {C['D']}[Enter]{C['R']}")
         elif choice == '7':
+            scheduler_install_menu()
+        elif choice == '8':
             clear()
             header("📖 PANDUAN SETUP TERJADWAL")
             print()
