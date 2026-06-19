@@ -852,7 +852,7 @@ def api_batch_pattern_tegangan():
             source_mv = patterns.get(str(source_id), {}).get("mv_avg", "?")
             pdata["note"] = f"HV={source_mv}kV (dari MV {source_name}), MV genap bulat"
     
-    return jsonify({"success": True, "patterns": patterns})
+    return jsonify({"success": True, "patterns": patterns, "is_target_weekend": today.weekday() >= 5})
 
 @app.route("/api/data/sync-portal", methods=["POST"])
 @login_required

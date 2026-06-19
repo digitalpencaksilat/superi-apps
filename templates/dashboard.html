@@ -1152,7 +1152,9 @@
             const isTegangan = type === 'tegangan-trafo';
             
             let samplesMax = 0;
-            Object.values(patterns).forEach(p => { if (p.samples > samplesMax) samplesMax = p.samples; });
+            Object.entries(patterns).forEach(([k, p]) => { 
+                if (k !== '_is_weekend' && p && p.samples > samplesMax) samplesMax = p.samples; 
+            });
             
             const isWeekend = patterns._is_weekend || false;
             const dayType = isWeekend ? '🏠 Weekend' : '🏢 Weekday';
