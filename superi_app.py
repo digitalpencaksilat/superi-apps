@@ -1291,6 +1291,152 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     
     input(f"  {C['D']}[Enter]{C['R']}")
 
+def auto_mode_menu():
+    """Menu pengaturan Auto Mode (input + sync terjadwal)."""
+    while True:
+        clear()
+        header("⏰ AUTO MODE  ·  Input & Sync Terjadwal")
+        cfg = load_config()
+        enabled = cfg.get("auto_enabled", False)
+        win_start = cfg.get("auto_window_start", 22)
+        win_end = cfg.get("auto_window_end", 5)
+        types = cfg.get("auto_types", ["penyulang", "trafo", "tegangan"])
+        sync_portal = cfg.get("auto_sync_portal", True)
+        
+        print()
+        print(f"  {C['D']}┌─────────────────────────────────────────────────────┐{C['R']}")
+        if enabled:
+            print(f"  {C['D']}│{C['R']}  {C['G']}● AKTIF{C['R']}  {C['D']}— terjadwal otomatis di window jam{C['R']}")
+        else:
+            print(f"  {C['D']}│{C['R']}  {C['RE']}○ NONAKTIF{C['R']}  {C['D']}— tidak akan jalan walau cron memanggil{C['R']}")
+        print(f"  {C['D']}│{C['R']}  ⏱  Window     : {win_start:02d}:00 - {win_end:02d}:00")
+        print(f"  {C['D']}│{C['R']}  📋 Tipe       : {', '.join(types)}")
+        print(f"  {C['D']}│{C['R']}  🔄 Sync Portal: {'YES' if sync_portal else 'NO'}")
+        print(f"  {C['D']}└─────────────────────────────────────────────────────┘{C['R']}")
+        print()
+        
+        print(f"  {C['M']}{C['B']}AKSI{C['R']}")
+        if enabled:
+            print(f"  {C['C']}[1]{C['R']} {C['RE']}Nonaktifkan{C['R']} Auto Mode")
+        else:
+            print(f"  {C['C']}[1]{C['R']} {C['G']}Aktifkan{C['R']} Auto Mode")
+        print(f"  {C['C']}[2]{C['R']} Atur Window Jam (mulai-akhir)")
+        print(f"  {C['C']}[3]{C['R']} Pilih Tipe Data")
+        print(f"  {C['C']}[4]{C['R']} Toggle Sync Portal APD ({'ON' if sync_portal else 'OFF'})")
+        print(f"  {C['C']}[5]{C['R']} 🧪 Test Sekarang (dry-run jam ini)")
+        print(f"  {C['C']}[6]{C['R']} 📜 Lihat Log Aktivitas")
+        print()
+        print(f"  {C['M']}{C['B']}SETUP TERJADWAL{C['R']}")
+        print(f"  {C['C']}[7]{C['R']} 📖 Tampilkan panduan cron / Task Scheduler")
+        print()
+        print(f"  {C['RE']}[0]{C['R']} Kembali ke menu utama")
+        print()
+        print(f"  {C['D']}{'─' * 56}{C['R']}")
+        
+        choice = input(f"  {C['B']}Pilih ▸ {C['R']}").strip()
+        
+        if choice == '0':
+            return
+        elif choice == '1':
+            cfg["auto_enabled"] = not enabled
+            cfg.setdefault("auto_window_start", 22)
+            cfg.setdefault("auto_window_end", 5)
+            cfg.setdefault("auto_types", ["penyulang", "trafo", "tegangan"])
+            cfg.setdefault("auto_sync_portal", True)
+            save_config(cfg)
+            status = f"{C['G']}AKTIF{C['R']}" if cfg["auto_enabled"] else f"{C['RE']}NONAKTIF{C['R']}"
+            print(f"\n  ✓ Auto Mode sekarang {status}")
+            input(f"  {C['D']}[Enter]{C['R']}")
+        elif choice == '2':
+            print()
+            print(f"  {C['D']}Window jam = rentang waktu auto mode aktif{C['R']}")
+            print(f"  {C['D']}Contoh: 22-5 = jalan jam 22:00 sampai 05:00 (lintas hari){C['R']}")
+            try:
+                s = int(input(f"  Mulai (jam 0-23) [{win_start}]: ").strip() or win_start)
+                e = int(input(f"  Akhir (jam 0-23) [{win_end}]: ").strip() or win_end)
+                if 0 <= s <= 23 and 0 <= e <= 23:
+                    cfg["auto_window_start"] = s
+                    cfg["auto_window_end"] = e
+                    save_config(cfg)
+                    print(f"\n  {C['G']}✓ Window: {s:02d}:00 - {e:02d}:00{C['R']}")
+                else:
+                    print(f"\n  {C['RE']}✗ Jam harus 0-23{C['R']}")
+            except ValueError:
+                print(f"\n  {C['RE']}✗ Input tidak valid{C['R']}")
+            input(f"  {C['D']}[Enter]{C['R']}")
+        elif choice == '3':
+            print()
+            print(f"  {C['D']}Pilih tipe data yang akan di-input otomatis (pisah dengan koma){C['R']}")
+            print(f"  {C['D']}Contoh: penyulang,trafo,tegangan{C['R']}")
+            current = ",".join(types)
+            new_types = input(f"  Tipe [{current}]: ").strip() or current
+            valid = [t.strip() for t in new_types.split(",") if t.strip() in ["penyulang", "trafo", "tegangan"]]
+            if valid:
+                cfg["auto_types"] = valid
+                save_config(cfg)
+                print(f"\n  {C['G']}✓ Tipe diset: {', '.join(valid)}{C['R']}")
+            else:
+                print(f"\n  {C['RE']}✗ Tidak ada tipe valid{C['R']}")
+            input(f"  {C['D']}[Enter]{C['R']}")
+        elif choice == '4':
+            cfg["auto_sync_portal"] = not sync_portal
+            save_config(cfg)
+            status = f"{C['G']}ON{C['R']}" if cfg["auto_sync_portal"] else f"{C['RE']}OFF{C['R']}"
+            print(f"\n  ✓ Sync Portal: {status}")
+            input(f"  {C['D']}[Enter]{C['R']}")
+        elif choice == '5':
+            print(f"\n  {C['Y']}🧪 Test dry-run jam {datetime.now().hour:02d}:00...{C['R']}\n")
+            try:
+                import superi_auto
+                superi_auto.run_auto(force_jam=datetime.now().hour, dry_run=True)
+            except Exception as e:
+                print(f"  {C['RE']}✗ Error: {e}{C['R']}")
+            input(f"\n  {C['D']}[Enter]{C['R']}")
+        elif choice == '6':
+            log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auto_log.txt")
+            if os.path.exists(log_path):
+                clear()
+                header("📜 LOG AKTIVITAS AUTO")
+                print()
+                with open(log_path) as f:
+                    lines = f.readlines()
+                # Tampilkan 40 baris terakhir
+                for line in lines[-40:]:
+                    print(f"  {line.rstrip()}")
+                print(f"\n  {C['D']}File: {log_path}{C['R']}")
+            else:
+                print(f"\n  {C['Y']}⚠ Belum ada log. Jalankan test dulu (menu 5).{C['R']}")
+            input(f"\n  {C['D']}[Enter]{C['R']}")
+        elif choice == '7':
+            clear()
+            header("📖 PANDUAN SETUP TERJADWAL")
+            print()
+            print(f"  {C['M']}{C['B']}🍎 macOS / Linux (cron){C['R']}\n")
+            print(f"  {C['D']}1. Buka terminal, ketik:{C['R']}")
+            print(f"     {C['C']}crontab -e{C['R']}\n")
+            print(f"  {C['D']}2. Tambahkan baris (jalan tiap jam menit ke-5):{C['R']}")
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            print(f"     {C['G']}5 * * * * {script_dir}/.venv/bin/python3 {script_dir}/superi_auto.py{C['R']}\n")
+            print(f"  {C['D']}3. Simpan & keluar (Ctrl+O, Enter, Ctrl+X di nano){C['R']}\n")
+            print(f"  {C['D']}Auto mode internal cek window jam jadi cuma eksekusi di rentang yang diset.{C['R']}\n")
+            print(f"  {C['M']}{C['B']}🪟 Windows (Task Scheduler){C['R']}\n")
+            print(f"  {C['D']}1. Buka {C['B']}Task Scheduler{C['R']} {C['D']}(cari di Start Menu){C['R']}")
+            print(f"  {C['D']}2. Create Basic Task → Daily, repeat every 1 hour{C['R']}")
+            print(f"  {C['D']}3. Action: Start a program{C['R']}")
+            print(f"     {C['D']}- Program  : {C['C']}superi.bat{C['R']}")
+            print(f"     {C['D']}- Arguments: {C['C']}auto{C['R']}")
+            print(f"     {C['D']}- Start in : folder project{C['R']}\n")
+            print(f"  {C['D']}4. Centang \"Wake the computer to run this task\"{C['R']}\n")
+            print(f"  {C['Y']}{C['B']}⚠ SYARAT WAJIB:{C['R']}")
+            print(f"  {C['D']}  • Komputer menyala & tidak sleep{C['R']}")
+            print(f"  {C['D']}  • Akun SUPER-I sudah clock-in (absen masuk){C['R']}")
+            print(f"  {C['D']}  • Terhubung jaringan internal PLN + internet{C['R']}\n")
+            print(f"  {C['D']}Detail lengkap: AUTO_MODE.md di folder project{C['R']}")
+            input(f"\n  {C['D']}[Enter]{C['R']}")
+        else:
+            print(f"\n  {C['RE']}✗ Pilihan tidak valid{C['R']}")
+            input(f"  {C['D']}[Enter]{C['R']}")
+
 def main():
     config = load_config()
     
@@ -1331,6 +1477,12 @@ def main():
         # Lain
         print(f"  {C['D']}{C['B']}PENGATURAN{C['R']}")
         print(f"  {C['C']}[G]{C['R']} Ganti Tanggal   {C['C']}[L]{C['R']} Login Ulang   {C['C']}[S]{C['R']} Setup   {C['RE']}[0]{C['R']} Keluar")
+        print()
+        # Auto mode status
+        _auto_cfg = load_config()
+        _auto_on = _auto_cfg.get("auto_enabled", False)
+        _auto_badge = f"{C['G']}ON{C['R']}" if _auto_on else f"{C['RE']}OFF{C['R']}"
+        print(f"  {C['C']}[D]{C['R']} ⏰ Auto Mode [{_auto_badge}]")
         print()
         print(f"  {C['D']}{'─' * 56}{C['R']}")
 
@@ -1382,6 +1534,9 @@ def main():
                 batch_fill_periode(token, "beban-trafo", gi_id, date_str, user)
             elif choice == 'c':
                 batch_fill_periode(token, "tegangan-trafo", gi_id, date_str, user)
+            elif choice == 'd':
+                auto_mode_menu()
+                config = load_config()
         except Exception as e:
             print(f"\n  ✗ Error: {e}")
             input(f"  {C['D']}[Enter]{C['R']}")
