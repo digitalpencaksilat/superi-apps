@@ -240,6 +240,10 @@ def smart_suggest_tegangan_from_cache(cache, item_id, periode, target_is_weekend
     - TRAFO 1: 1 desimal (mis. 20.3, 20.4)
     - TRAFO 2 / TRAFO 3 / lainnya: 2 desimal (mis. 20.43)
     
+    Aturan HV trafo PS (engineering rule):
+    - HV TRAFO PS 1 = MV TRAFO 1 (sisi 20kV trafo sumber)
+    - HV TRAFO PS 2 = MV TRAFO 3 (sisi 20kV trafo sumber)
+    
     Returns: (mv_suggest, hv_suggest, info_str) atau (None, None, None)
     """
     if item_id not in cache:
@@ -288,17 +292,55 @@ def smart_suggest_tegangan_from_cache(cache, item_id, periode, target_is_weekend
     if mv_decimals == 0:
         smart_mv = int(smart_mv)
     
-    # HV: rata-rata weighted, round integer (untuk TRAFO 1/2/3)
-    # Untuk TRAFO PS, HV justru sisi 20kV (float), pakai 2 desimal
+    # HV: aturan engineering PS — HV PS = MV trafo sumber
     if "PS" in nama:
-        # PS: HV adalah sisi MV trafo (~20.x kV), float 2 desimal
-        base_hv = sum(all_hv) / len(all_hv)
-        pattern_hv = sum(pat_hv) / len(pat_hv)
-        smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
-        smart_hv = round(smart_hv, 2)
-        if pat_hv:
-            smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
+        # Cari trafo sumber: PS 1 → TRAFO 1, PS 2 → TRAFO 3
+        if "1" in nama:
+            source_target = "TRAFO 1"
+        elif "2" in nama:
+            source_target = "TRAFO 3"
+        else:
+            source_target = None
+        
+        # Cari MV trafo sumber di cache untuk periode yang sama
+        source_mv = None
+        if source_target:
+            for sid, sdata in cache.items():
+                if sdata.get("name", "").upper() == source_target:
+                    src_p = sdata["periode_data"].get(periode)
+                    if src_p and src_p["all"]:
+                        # Pakai logika weekday/weekend yang sama
+                        if target_is_weekend:
+                            src_pat = src_p["weekend"] if src_p["weekend"] else src_p["all"]
+                        else:
+                            src_pat = src_p["weekday"] if src_p["weekday"] else src_p["all"]
+                        src_mv_vals = [e["mv"] for e in src_pat]
+                        src_all_mv = [e["mv"] for e in src_p["all"]]
+                        if src_mv_vals:
+                            base_src = sum(src_all_mv) / len(src_all_mv)
+                            pat_src = sum(src_mv_vals) / len(src_mv_vals)
+                            source_mv = 0.5 * pat_src + 0.5 * base_src
+                            # Bulatkan sesuai aturan trafo sumber
+                            src_decimals = 1 if source_target == "TRAFO 1" else 2
+                            source_mv = round(source_mv, src_decimals)
+                            # Clamp
+                            source_mv = max(min(src_mv_vals), min(max(src_mv_vals), source_mv))
+                            source_mv = round(source_mv, src_decimals)
+                    break
+        
+        if source_mv is not None:
+            smart_hv = source_mv
+            info = f"{pattern_type} MV={pattern_mv:.0f} | HV=MV {source_target}={source_mv} ({len(pat_mv)}d)"
+        else:
+            # Fallback: pakai histori HV PS sendiri (lama)
+            base_hv = sum(all_hv) / len(all_hv)
+            pattern_hv = sum(pat_hv) / len(pat_hv)
+            smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
             smart_hv = round(smart_hv, 2)
+            if pat_hv:
+                smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
+                smart_hv = round(smart_hv, 2)
+            info = f"{pattern_type} MV={pattern_mv:.0f} HV={pattern_hv:.2f} (fallback {len(pat_mv)}d)"
     else:
         # Trafo biasa: HV ~150kV, integer
         base_hv = sum(all_hv) / len(all_hv)
@@ -308,8 +350,8 @@ def smart_suggest_tegangan_from_cache(cache, item_id, periode, target_is_weekend
         if pat_hv:
             smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
         smart_hv = int(smart_hv)
+        info = f"{pattern_type} MV={pattern_mv:.2f} HV={pattern_hv:.0f} ({len(pat_mv)}d)"
     
-    info = f"{pattern_type} MV={pattern_mv:.2f} HV={pattern_hv:.2f} ({len(pat_mv)}d)"
     return smart_mv, smart_hv, info
 
 def smart_suggest_value(token, data_type, item_id, periode, date_str, days_back=14):
