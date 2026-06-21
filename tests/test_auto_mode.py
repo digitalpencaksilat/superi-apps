@@ -99,6 +99,10 @@ class WindowsLauncherStaticTests(unittest.TestCase):
     def test_windows_scheduler_cd_to_project_before_auto(self):
         self.assertIn('cmd /c cd /d "{SCRIPT_DIR}" && "{bat}" auto', self.app)
 
+    def test_windows_scheduler_runs_every_5_minutes_and_logs(self):
+        self.assertIn('"/sc", "minute", "/mo", "5"', self.app)
+        self.assertIn('auto_task_log.txt', self.app)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

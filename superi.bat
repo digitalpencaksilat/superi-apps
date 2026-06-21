@@ -6,6 +6,7 @@ REM ============================================================
 
 setlocal enabledelayedexpansion
 set "SUPERI_DIR=%~dp0"
+set "SUPERI_CMD=%~1"
 
 REM Cari Python: prioritas portable (python\), lalu venv, lalu system
 if exist "%SUPERI_DIR%python\python.exe" (
@@ -21,7 +22,7 @@ if exist "%SUPERI_DIR%python\python.exe" (
         echo   [X] Python tidak ditemukan!
         echo   Jalankan setup_windows.bat dulu untuk download Python portable.
         echo.
-        pause
+        if /i not "%SUPERI_CMD%"=="auto" pause
         exit /b 1
     )
 )
@@ -46,7 +47,7 @@ if errorlevel 1 (
         echo   [X] Dependency gagal diinstall.
         echo   Jalankan setup_windows.bat lalu coba lagi.
         echo.
-        pause
+        if /i not "%SUPERI_CMD%"=="auto" pause
         exit /b 1
     )
     "%PYTHON%" -c "import sys, os; sys.path.insert(0, os.getcwd()); import requests, flask, bs4, superi_sync, superi_auto" >nul 2>nul
@@ -56,7 +57,7 @@ if errorlevel 1 (
         echo   Pastikan superi.bat dijalankan dari folder project SUPER-I.
         echo   Folder: %SUPERI_DIR%
         echo.
-        pause
+        if /i not "%SUPERI_CMD%"=="auto" pause
         exit /b 1
     )
 )

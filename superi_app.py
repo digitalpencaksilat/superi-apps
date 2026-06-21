@@ -1357,15 +1357,16 @@ def win_task_is_installed():
         return False
 
 def win_task_install():
-    """Pasang Windows Task Scheduler (tiap jam)."""
+    """Pasang Windows Task Scheduler (tiap 5 menit, window dicek internal)."""
     bat = os.path.join(SCRIPT_DIR, "superi.bat")
-    task_cmd = f'cmd /c cd /d "{SCRIPT_DIR}" && "{bat}" auto'
+    task_log = os.path.join(SCRIPT_DIR, "auto_task_log.txt")
+    task_cmd = f'cmd /c cd /d "{SCRIPT_DIR}" && "{bat}" auto >> "{task_log}" 2>&1'
     try:
-        # /sc hourly = tiap jam; /tr = command; /f = force overwrite
+        # Jalankan tiap 5 menit. superi_auto.py sendiri yang cek window jam dan skip duplikat.
         proc = subprocess.run([
             "schtasks", "/create", "/tn", WIN_TASK_NAME,
             "/tr", task_cmd,
-            "/sc", "hourly",
+            "/sc", "minute", "/mo", "5",
             "/f"
         ], capture_output=True, text=True)
         return proc.returncode == 0, proc.stderr or proc.stdout
@@ -1397,7 +1398,7 @@ def scheduler_install_menu():
     print()
     if installed:
         print(f"  {C['G']}● Jadwal otomatis SUDAH terpasang{C['R']}")
-        print(f"  {C['D']}Sistem akan memanggil auto mode tiap jam.{C['R']}")
+        print(f"  {C['D']}Sistem akan memanggil auto mode tiap 5 menit (window dicek internal).{C['R']}")
     else:
         print(f"  {C['RE']}○ Jadwal otomatis BELUM terpasang{C['R']}")
     print()
@@ -1417,8 +1418,9 @@ def scheduler_install_menu():
             ok, msg = cron_install()
         if ok:
             print(f"  {C['G']}✓ Jadwal otomatis terpasang!{C['R']}")
-            print(f"  {C['D']}Sistem akan jalankan auto mode tiap jam (menit ke-5).{C['R']}")
+            print(f"  {C['D']}Sistem akan jalankan auto mode tiap 5 menit.{C['R']}")
             print(f"  {C['D']}Pastikan Auto Mode AKTIF + komputer menyala di window jam.{C['R']}")
+            print(f"  {C['D']}Log Task Scheduler: {os.path.join(SCRIPT_DIR, 'auto_task_log.txt')}{C['R']}")
         else:
             print(f"  {C['RE']}✗ Gagal: {msg}{C['R']}")
             if not is_win:
@@ -1576,7 +1578,7 @@ def auto_mode_menu():
             print(f"  {C['D']}Auto mode internal cek window jam jadi cuma eksekusi di rentang yang diset.{C['R']}\n")
             print(f"  {C['M']}{C['B']}🪟 Windows (Task Scheduler){C['R']}\n")
             print(f"  {C['D']}1. Buka {C['B']}Task Scheduler{C['R']} {C['D']}(cari di Start Menu){C['R']}")
-            print(f"  {C['D']}2. Create Basic Task → Daily, repeat every 1 hour{C['R']}")
+            print(f"  {C['D']}2. Create Basic Task → Daily, repeat every 5 minutes{C['R']}")
             print(f"  {C['D']}3. Action: Start a program{C['R']}")
             print(f"     {C['D']}- Program  : {C['C']}superi.bat{C['R']}")
             print(f"     {C['D']}- Arguments: {C['C']}auto{C['R']}")
