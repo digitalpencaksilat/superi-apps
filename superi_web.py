@@ -11,9 +11,14 @@ import urllib.request
 import urllib.error
 import json
 import os
+import sys
 from datetime import datetime
 from functools import wraps
 import base64
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
 
 app = Flask(__name__)
 app.secret_key = os.urandom(32)

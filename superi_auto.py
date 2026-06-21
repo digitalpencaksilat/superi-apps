@@ -27,7 +27,9 @@ Config tambahan di .superi_config.json:
   "auto_window_start": 22,    # jam mulai (0-23)
   "auto_window_end": 5,        # jam akhir (0-23, boleh < start untuk lintas hari)
   "auto_types": ["penyulang", "trafo", "tegangan"],
-  "auto_sync_portal": true     # auto sync ke Portal APD setelah input
+  "auto_sync_portal": true,    # auto sync ke Portal APD setelah input
+  "auto_retry_attempts": 5,    # ulangi input gagal/kosong sampai verifikasi terisi
+  "auto_retry_delay": 10       # jeda antar retry (detik)
 """
 
 import json
@@ -105,31 +107,92 @@ def is_anomaly(value, hist_values, threshold=0.20):
         return True, f"deviasi {deviation*100:.0f}% dari rata-rata histori {avg:.1f}"
     return False, ""
 
+
+def clamp_to_history(value, hist_values):
+    """Clamp nilai ke range histori kalau histori tersedia."""
+    if value is None or not hist_values:
+        return value
+    return max(min(hist_values), min(max(hist_values), value))
+
+
+def fallback_beban_from_cache(cache, item_id):
+    """Fallback beban kalau histori periode target kosong: rata-rata semua periode item."""
+    if item_id not in cache:
+        return None, None
+    vals = []
+    for pdata in cache[item_id]["periode_data"].values():
+        vals.extend(pdata.get("all", []))
+    vals = [v for v in vals if v is not None]
+    if not vals:
+        return None, None
+    val = round((sum(vals) / len(vals)) / 5) * 5
+    val = int(clamp_to_history(val, vals))
+    return val, vals
+
+
+def fallback_tegangan_from_cache(cache, item_id):
+    """Fallback tegangan kalau histori periode target kosong: rata-rata semua periode item."""
+    if item_id not in cache:
+        return None, None, None, None
+    nama = cache[item_id].get("name", "").upper()
+    if "PS" in nama:
+        mv_decimals = 0
+    elif nama == "TRAFO 1":
+        mv_decimals = 1
+    else:
+        mv_decimals = 2
+    entries = []
+    for pdata in cache[item_id]["periode_data"].values():
+        entries.extend(pdata.get("all", []))
+    entries = [e for e in entries if e.get("mv") is not None and e.get("hv") is not None]
+    if not entries:
+        return None, None, None, None
+    mv_vals = [e["mv"] for e in entries]
+    hv_vals = [e["hv"] for e in entries]
+    mv = round(sum(mv_vals) / len(mv_vals), mv_decimals)
+    mv = round(clamp_to_history(mv, mv_vals), mv_decimals)
+    if mv_decimals == 0:
+        mv = int(mv)
+    hv = sum(hv_vals) / len(hv_vals)
+    if "PS" in nama:
+        hv = round(clamp_to_history(hv, hv_vals), 2)
+    else:
+        hv = int(round(clamp_to_history(round(hv), hv_vals)))
+    return mv, hv, mv_vals, hv_vals
+
+
 # ============================================================
 # AUTO INPUT (per tipe per jam)
 # ============================================================
-def auto_input_jam(token, data_type, gi_id, date_str, periode, dry_run=False):
+def auto_input_jam(token, data_type, gi_id, date_str, periode, dry_run=False, max_attempts=5, retry_delay=10):
     """Auto input semua item untuk 1 tipe data, 1 jam.
     Return: dict {success, fail, skipped, anomaly, items: [...]}
     """
     ep = a.ENDPOINTS[data_type]
+    max_attempts = max(1, int(max_attempts or 1))
+    retry_delay = max(1, int(retry_delay or 1))
+    data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
+
+    def missing_targets():
+        """Fetch ulang data terbaru; return item ON yang periode ini belum terisi."""
+        result = a.api_get(token, ep["list"], {"garduIndukId": gi_id, "date": date_str})
+        items = result.get("data", {}).get("items", [])
+        if not items:
+            return None, []
+        targets = []
+        for it in items:
+            if it.get("statusCB") == "OFF":
+                continue
+            entries = it.get(data_key, [])
+            if periode not in [e.get("periode") for e in entries]:
+                targets.append(it)
+        return items, targets
     
     # Fetch data hari ini untuk cek mana yang sudah/belum terisi
-    result = a.api_get(token, ep["list"], {"garduIndukId": gi_id, "date": date_str})
-    items = result.get("data", {}).get("items", [])
+    items, targets = missing_targets()
     if not items:
         log(f"  Tidak ada item {data_type}", "WARN")
         return {"success": 0, "fail": 0, "skipped": 0, "anomaly": 0, "items": []}
-    
-    # Filter item yang belum terisi di periode ini & status ON
-    data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
-    targets = []
-    for it in items:
-        if it.get("statusCB") == "OFF":
-            continue
-        entries = it.get(data_key, [])
-        if periode not in [e["periode"] for e in entries]:
-            targets.append(it)
     
     if not targets:
         log(f"  {ep['label']} P{periode:02d}: semua sudah terisi, skip")
@@ -142,89 +205,134 @@ def auto_input_jam(token, data_type, gi_id, date_str, periode, dry_run=False):
     success = fail = anomaly = 0
     item_logs = []
     dt = datetime.strptime(date_str, "%Y-%m-%d")
-    
-    for it in targets:
-        nama = it["nama"]
-        item_id = it["id"]
-        
-        # Hitung suggest
-        if data_type == "tegangan-trafo":
-            mv, hv, info = a.smart_suggest_tegangan_from_cache(cache, item_id, periode, is_weekend)
-            if mv is None:
-                log(f"  [SKIP] {nama} P{periode:02d}: no histori", "WARN")
-                fail += 1
-                continue
-            
-            # Anomaly check (MV)
-            pdata = cache[item_id]["periode_data"].get(periode, {})
-            hist_mv = [e["mv"] for e in pdata.get("all", [])]
-            is_anom, reason = is_anomaly(mv, hist_mv)
-            if is_anom:
-                log(f"  [ANOMALY] {nama} P{periode:02d}: MV={mv} ({reason})", "WARN")
-                anomaly += 1
-                continue
-            
-            value_log = f"MV={mv} HV={hv}"
-            data_dict = {
-                ep["id_field"]: item_id,
-                "timezone": "Asia/Jakarta",
-                "periode": periode,
-                "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year,
-                "durasi": 0.1,
-                ep["value_field"]: mv, "hv": hv,
-                "fotoHV": {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
-                "fotoMV": {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
-            }
-        else:
-            val, info = a.smart_suggest_from_cache(cache, item_id, periode, is_weekend)
-            if val is None:
-                log(f"  [SKIP] {nama} P{periode:02d}: no histori", "WARN")
-                fail += 1
-                continue
-            
-            # Anomaly check
-            pdata = cache[item_id]["periode_data"].get(periode, {})
-            hist_vals = pdata.get("all", [])
-            is_anom, reason = is_anomaly(val, hist_vals)
-            if is_anom:
-                log(f"  [ANOMALY] {nama} P{periode:02d}: val={val} ({reason})", "WARN")
-                anomaly += 1
-                continue
-            
-            value_log = f"{val}{ep['unit']}"
-            data_dict = {
-                ep["id_field"]: item_id,
-                "timezone": "Asia/Jakarta",
-                "periode": periode,
-                "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year,
-                "durasi": 0.1,
-                ep["value_field"]: val,
-                "foto": {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
-            }
-        
-        if dry_run:
-            log(f"  [DRY] {nama} P{periode:02d}: {value_log}")
-            success += 1
-            item_logs.append({"nama": nama, "value": value_log, "ok": True})
-            continue
-        
-        # Submit
-        try:
-            status, resp = a.api_post_multipart(token, ep["input"], data_dict, a.DUMMY_JPEG, ep["file_field"], ep["num_photos"])
-            if resp.get("success"):
-                log(f"  [OK] {nama} P{periode:02d}: {value_log}")
+
+    for attempt in range(1, max_attempts + 1):
+        if attempt > 1:
+            log(f"  Retry {ep['label']} P{periode:02d} attempt {attempt}/{max_attempts}: {len(targets)} item belum terisi", "WARN")
+
+        attempt_fail = 0
+        attempt_anomaly = 0
+
+        for it in targets:
+            nama = it["nama"]
+            item_id = it["id"]
+
+            # Hitung suggest
+            if data_type == "tegangan-trafo":
+                mv, hv, info = a.smart_suggest_tegangan_from_cache(cache, item_id, periode, is_weekend)
+                if mv is None:
+                    mv, hv, fallback_mv_hist, fallback_hv_hist = fallback_tegangan_from_cache(cache, item_id)
+                    if mv is None:
+                        log(f"  [SKIP] {nama} P{periode:02d}: no histori sama sekali", "WARN")
+                        attempt_fail += 1
+                        item_logs.append({"nama": nama, "ok": False, "err": "no histori"})
+                        continue
+                    log(f"  [FALLBACK] {nama} P{periode:02d}: pakai rata-rata semua periode", "WARN")
+                else:
+                    fallback_mv_hist = None
+                    fallback_hv_hist = None
+
+                # Anomaly check (MV)
+                pdata = cache[item_id]["periode_data"].get(periode, {})
+                hist_mv = [e["mv"] for e in pdata.get("all", [])] or (fallback_mv_hist or [])
+                is_anom, reason = is_anomaly(mv, hist_mv)
+                if is_anom:
+                    old_mv = mv
+                    mv = clamp_to_history(mv, hist_mv)
+                    log(f"  [ANOMALY] {nama} P{periode:02d}: MV={old_mv} → clamp {mv} ({reason})", "WARN")
+                    attempt_anomaly += 1
+
+                value_log = f"MV={mv} HV={hv}"
+                data_dict = {
+                    ep["id_field"]: item_id,
+                    "timezone": "Asia/Jakarta",
+                    "periode": periode,
+                    "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year,
+                    "durasi": 0.1,
+                    ep["value_field"]: mv, "hv": hv,
+                    "fotoHV": {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+                    "fotoMV": {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+                }
+            else:
+                val, info = a.smart_suggest_from_cache(cache, item_id, periode, is_weekend)
+                if val is None:
+                    val, fallback_hist_vals = fallback_beban_from_cache(cache, item_id)
+                    if val is None:
+                        log(f"  [SKIP] {nama} P{periode:02d}: no histori sama sekali", "WARN")
+                        attempt_fail += 1
+                        item_logs.append({"nama": nama, "ok": False, "err": "no histori"})
+                        continue
+                    log(f"  [FALLBACK] {nama} P{periode:02d}: pakai rata-rata semua periode", "WARN")
+                else:
+                    fallback_hist_vals = None
+
+                # Anomaly check
+                pdata = cache[item_id]["periode_data"].get(periode, {})
+                hist_vals = pdata.get("all", []) or (fallback_hist_vals or [])
+                is_anom, reason = is_anomaly(val, hist_vals)
+                if is_anom:
+                    old_val = val
+                    val = int(round(clamp_to_history(val, hist_vals) / 5) * 5)
+                    log(f"  [ANOMALY] {nama} P{periode:02d}: val={old_val} → clamp {val} ({reason})", "WARN")
+                    attempt_anomaly += 1
+
+                value_log = f"{val}{ep['unit']}"
+                data_dict = {
+                    ep["id_field"]: item_id,
+                    "timezone": "Asia/Jakarta",
+                    "periode": periode,
+                    "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year,
+                    "durasi": 0.1,
+                    ep["value_field"]: val,
+                    "foto": {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+                }
+
+            if dry_run:
+                log(f"  [DRY] {nama} P{periode:02d}: {value_log}")
                 success += 1
                 item_logs.append({"nama": nama, "value": value_log, "ok": True})
-            else:
-                msg = resp.get("message", "?")
-                log(f"  [FAIL] {nama} P{periode:02d}: {msg}", "ERROR")
-                fail += 1
-                item_logs.append({"nama": nama, "value": value_log, "ok": False, "err": str(msg)[:80]})
-        except Exception as e:
-            log(f"  [FAIL] {nama} P{periode:02d}: {e}", "ERROR")
-            fail += 1
-        
-        time.sleep(0.1)  # rate limit
+                continue
+
+            # Submit
+            try:
+                status, resp = a.api_post_multipart(token, ep["input"], data_dict, a.DUMMY_JPEG, ep["file_field"], ep["num_photos"])
+                if resp.get("success"):
+                    log(f"  [OK] {nama} P{periode:02d}: {value_log}")
+                    item_logs.append({"nama": nama, "value": value_log, "ok": True})
+                else:
+                    msg = resp.get("message", "?")
+                    log(f"  [FAIL] {nama} P{periode:02d}: {msg}", "ERROR")
+                    attempt_fail += 1
+                    item_logs.append({"nama": nama, "value": value_log, "ok": False, "err": str(msg)[:80]})
+            except Exception as e:
+                log(f"  [FAIL] {nama} P{periode:02d}: {e}", "ERROR")
+                attempt_fail += 1
+
+            time.sleep(0.1)  # rate limit
+
+        if dry_run:
+            fail += attempt_fail
+            anomaly += attempt_anomaly
+            break
+
+        # Guard utama: fetch ulang, baru anggap sukses kalau benar-benar sudah terisi di SUPER-I.
+        items, remaining = missing_targets()
+        filled_now = len(targets) - len(remaining)
+        success += max(0, filled_now)
+        if not remaining:
+            log(f"  [VERIFY] {ep['label']} P{periode:02d}: semua target sudah terisi")
+            break
+
+        targets = remaining
+        if attempt < max_attempts:
+            log(f"  [RETRY] {ep['label']} P{periode:02d}: masih kosong {len(targets)} item, tunggu {retry_delay}s", "WARN")
+            time.sleep(retry_delay)
+        else:
+            fail += len(targets)
+            anomaly += attempt_anomaly
+            names = ", ".join([it.get("nama", "?") for it in targets[:8]])
+            more = "..." if len(targets) > 8 else ""
+            log(f"  [GIVE UP] {ep['label']} P{periode:02d}: {len(targets)} item tetap kosong setelah {max_attempts} attempt: {names}{more}", "ERROR")
     
     return {"success": success, "fail": fail, "skipped": 0, "anomaly": anomaly, "items": item_logs}
 
@@ -286,7 +394,11 @@ def run_auto(force_jam=None, types=None, dry_run=False):
         if not full_type:
             continue
         log(f"\n→ {full_type.upper()}")
-        result = auto_input_jam(token, full_type, gi_id, date_str, jam, dry_run=dry_run)
+        result = auto_input_jam(
+            token, full_type, gi_id, date_str, jam, dry_run=dry_run,
+            max_attempts=cfg.get("auto_retry_attempts", 5),
+            retry_delay=cfg.get("auto_retry_delay", 10),
+        )
         for k in total:
             total[k] += result[k]
         if result["success"] > 0:
@@ -300,12 +412,20 @@ def run_auto(force_jam=None, types=None, dry_run=False):
         if cfg.get("portal_user") and cfg.get("portal_password"):
             log(f"\n→ SYNC ke Portal APD (jam {jam:02d}, types={','.join(successful_types)})")
             for t in successful_types:
-                try:
-                    ok = s.do_sync(t, jam, jam, date_str, dry_run=False)
-                    if not ok:
-                        log(f"  Sync {t} ada error", "WARN")
-                except Exception as e:
-                    log(f"  Sync {t} gagal: {e}", "ERROR")
+                sync_ok = False
+                for attempt in range(1, 4):
+                    try:
+                        ok = s.do_sync(t, jam, jam, date_str, dry_run=False)
+                        if ok:
+                            sync_ok = True
+                            break
+                        log(f"  Sync {t} ada error (attempt {attempt}/3)", "WARN")
+                    except Exception as e:
+                        log(f"  Sync {t} gagal attempt {attempt}/3: {e}", "ERROR")
+                    if attempt < 3:
+                        time.sleep(10)
+                if not sync_ok:
+                    log(f"  Sync {t} gagal final setelah 3 attempt", "ERROR")
         else:
             log("Portal APD credentials belum diset, skip sync", "WARN")
     
@@ -323,11 +443,14 @@ def cmd_enable():
     cfg.setdefault("auto_window_end", 5)
     cfg.setdefault("auto_types", ["penyulang", "trafo", "tegangan"])
     cfg.setdefault("auto_sync_portal", True)
+    cfg.setdefault("auto_retry_attempts", 5)
+    cfg.setdefault("auto_retry_delay", 10)
     save_cfg(cfg)
     print(f"\n  ✓ Auto mode AKTIF")
     print(f"  Window: {cfg['auto_window_start']:02d}:00 - {cfg['auto_window_end']:02d}:00")
     print(f"  Types : {', '.join(cfg['auto_types'])}")
     print(f"  Sync  : {'YES' if cfg['auto_sync_portal'] else 'NO'}\n")
+    print(f"  Retry : {cfg['auto_retry_attempts']}x, jeda {cfg['auto_retry_delay']}s\n")
 
 def cmd_disable():
     cfg = load_cfg()
@@ -345,6 +468,7 @@ def cmd_status():
         print(f"  Window: {cfg.get('auto_window_start',22):02d}:00 - {cfg.get('auto_window_end',5):02d}:00")
         print(f"  Types : {', '.join(cfg.get('auto_types', []))}")
         print(f"  Sync  : {'YES' if cfg.get('auto_sync_portal', True) else 'NO'}")
+        print(f"  Retry : {cfg.get('auto_retry_attempts', 5)}x, jeda {cfg.get('auto_retry_delay', 10)}s")
     print(f"  Log   : {LOG_FILE}\n")
 
 def main():

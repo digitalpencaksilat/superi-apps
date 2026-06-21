@@ -27,11 +27,39 @@ if exist "%SUPERI_DIR%python\python.exe" (
 )
 
 REM Set PYTHONPATH ke folder libs (untuk dependencies portable)
+set "PYTHONPATH=%SUPERI_DIR%;%PYTHONPATH%"
 if exist "%SUPERI_DIR%libs" (
     set "PYTHONPATH=%SUPERI_DIR%libs;%PYTHONPATH%"
 )
 
 cd /d "%SUPERI_DIR%"
+
+REM Pastikan dependency + modul project bisa di-import sebelum jalan.
+REM Ini penting untuk double-click / Task Scheduler Windows.
+"%PYTHON%" -c "import sys, os; sys.path.insert(0, os.getcwd()); import requests, flask, bs4, superi_sync, superi_auto" >nul 2>nul
+if errorlevel 1 (
+    echo.
+    echo   Menyiapkan dependency Python...
+    "%PYTHON%" -m pip install -r requirements.txt --no-warn-script-location
+    if errorlevel 1 (
+        echo.
+        echo   [X] Dependency gagal diinstall.
+        echo   Jalankan setup_windows.bat lalu coba lagi.
+        echo.
+        pause
+        exit /b 1
+    )
+    "%PYTHON%" -c "import sys, os; sys.path.insert(0, os.getcwd()); import requests, flask, bs4, superi_sync, superi_auto" >nul 2>nul
+    if errorlevel 1 (
+        echo.
+        echo   [X] Modul SUPER-I belum bisa di-import.
+        echo   Pastikan superi.bat dijalankan dari folder project SUPER-I.
+        echo   Folder: %SUPERI_DIR%
+        echo.
+        pause
+        exit /b 1
+    )
+)
 
 REM Tanpa argumen (double-click) → langsung buka CLI interaktif
 if "%1"=="" goto :run_cli
@@ -103,8 +131,11 @@ echo   Examples:
 echo     superi cli
 echo     superi sync --type all --jam 09
 echo     superi sync --type penyulang --jam 08-10 --dry-run
+echo     superi auto --status
+echo     superi auto --dry-run --jam 23
 echo.
 echo   Project: %SUPERI_DIR%
+echo   Python : %PYTHON%
 echo.
 pause
 goto :end
@@ -113,6 +144,12 @@ goto :end
 echo.
 echo   Menjalankan SUPER-I APP CLI...
 "%PYTHON%" superi_app.py
+if errorlevel 1 (
+    echo.
+    echo   [X] SUPER-I APP berhenti dengan error. Cek pesan di atas.
+    echo.
+    pause
+)
 goto :end
 
 :end

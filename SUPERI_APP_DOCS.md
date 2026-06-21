@@ -3,7 +3,7 @@
 ## Dokumentasi Proyek
 
 **Versi:** 1.0 | **Update:** 19 Juni 2026  
-**Author:** JULIAN SUDIBYO PRATAMA (15021JKT)  
+**Author:** SUPER-I APP Operator  
 **Lokasi:** GI MANGGARAI, UP5 DKI Jakarta dan Banten, PLN
 
 ---
@@ -60,7 +60,7 @@ python3 ~/superi_app.py
 
 Isi kredensial:
 ```
-NIP: 9825921JKT
+NIP: NIP_ANDA
 Password: ********
 ```
 
@@ -70,7 +70,7 @@ dari data absensi user — tidak perlu diisi manual.
 ### Environment Variables (opsional)
 
 ```bash
-export SUPERI_NIP="9825921JKT"
+export SUPERI_NIP="NIP_ANDA"
 export SUPERI_PASS="YOUR_PASSWORD_HERE"
 ```
 
@@ -90,7 +90,7 @@ https://super-i-app.plnes.co.id/api
 POST /auth/login-mobile
 Content-Type: application/json
 
-Body: {"nip":"9825921JKT","password":"87654321"}
+Body: {"nip":"NIP_ANDA","password":"<PASSWORD>"}
 
 Response 201:
 {
@@ -370,22 +370,22 @@ Untuk automation, scripting, atau cronjob.
 
 ```bash
 # Lihat data
-python3 ~/superi_input.py -n 9825921JKT -p <PASSWORD> --list-penyulang --gi 222
+python3 ~/superi_input.py -n NIP_ANDA -p <PASSWORD> --list-penyulang --gi 222
 
 # Input beban penyulang
-python3 ~/superi_input.py -n 9825921JKT -p <PASSWORD> \
+python3 ~/superi_input.py -n NIP_ANDA -p <PASSWORD> \
   --type beban-penyulang --gi 222 --id 2660 --periode 8 --value 125
 
 # Input beban trafo
-python3 ~/superi_input.py -n 9825921JKT -p <PASSWORD> \
+python3 ~/superi_input.py -n NIP_ANDA -p <PASSWORD> \
   --type beban-trafo --gi 222 --id 22241 --periode 8 --value 500
 
 # Input tegangan trafo (MV + HV)
-python3 ~/superi_input.py -n 9825921JKT -p <PASSWORD> \
+python3 ~/superi_input.py -n NIP_ANDA -p <PASSWORD> \
   --type tegangan-trafo --gi 222 --id 22241 --periode 8 --value 20.4 --hv 148
 
 # Delete entry
-python3 ~/superi_input.py -n 9825921JKT -p <PASSWORD> \
+python3 ~/superi_input.py -n NIP_ANDA -p <PASSWORD> \
   --type beban-penyulang --delete 2848454
 ```
 

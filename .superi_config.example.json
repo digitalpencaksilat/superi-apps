@@ -1,9 +1,9 @@
 {
   "nip": "NIP_ANDA_DISINI",
-  "password": "PASSWORD_SUPERI_ANDA",
+  "password": "<PASSWORD>",
   "gi_id": "222",
   "portal_url": "http://10.3.187.6/apdjakarta",
   "portal_user": "username.portal.pln",
-  "portal_password": "PASSWORD_PORTAL_PLN_ANDA",
+  "portal_password": "<PASSWORD>",
   "portal_gi_id": "143"
 }

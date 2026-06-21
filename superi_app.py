@@ -27,6 +27,8 @@ AUTH_URL = f"{API_BASE}/auth/login-mobile"
 BOUNDARY = "----FormBoundary7MA4YWxkTrZu0gW"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".superi_config.json")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
 # Fallback: kalau di project folder tidak ada, cek home (~/.superi_config.json)
 _HOME_CONFIG = os.path.expanduser("~/.superi_config.json")
 
@@ -1357,11 +1359,12 @@ def win_task_is_installed():
 def win_task_install():
     """Pasang Windows Task Scheduler (tiap jam)."""
     bat = os.path.join(SCRIPT_DIR, "superi.bat")
+    task_cmd = f'cmd /c cd /d "{SCRIPT_DIR}" && "{bat}" auto'
     try:
         # /sc hourly = tiap jam; /tr = command; /f = force overwrite
         proc = subprocess.run([
             "schtasks", "/create", "/tn", WIN_TASK_NAME,
-            "/tr", f'"{bat}" auto',
+            "/tr", task_cmd,
             "/sc", "hourly",
             "/f"
         ], capture_output=True, text=True)
@@ -1444,6 +1447,8 @@ def auto_mode_menu():
         win_end = cfg.get("auto_window_end", 5)
         types = cfg.get("auto_types", ["penyulang", "trafo", "tegangan"])
         sync_portal = cfg.get("auto_sync_portal", True)
+        retry_attempts = cfg.get("auto_retry_attempts", 5)
+        retry_delay = cfg.get("auto_retry_delay", 10)
         
         print()
         print(f"  {C['D']}┌─────────────────────────────────────────────────────┐{C['R']}")
@@ -1454,6 +1459,7 @@ def auto_mode_menu():
         print(f"  {C['D']}│{C['R']}  ⏱  Window     : {win_start:02d}:00 - {win_end:02d}:00")
         print(f"  {C['D']}│{C['R']}  📋 Tipe       : {', '.join(types)}")
         print(f"  {C['D']}│{C['R']}  🔄 Sync Portal: {'YES' if sync_portal else 'NO'}")
+        print(f"  {C['D']}│{C['R']}  🛡  Retry Guard: {retry_attempts}x, jeda {retry_delay}s")
         print(f"  {C['D']}└─────────────────────────────────────────────────────┘{C['R']}")
         print()
         
@@ -1488,6 +1494,8 @@ def auto_mode_menu():
             cfg.setdefault("auto_window_end", 5)
             cfg.setdefault("auto_types", ["penyulang", "trafo", "tegangan"])
             cfg.setdefault("auto_sync_portal", True)
+            cfg.setdefault("auto_retry_attempts", 5)
+            cfg.setdefault("auto_retry_delay", 10)
             save_config(cfg)
             status = f"{C['G']}AKTIF{C['R']}" if cfg["auto_enabled"] else f"{C['RE']}NONAKTIF{C['R']}"
             print(f"\n  ✓ Auto Mode sekarang {status}")

@@ -232,21 +232,21 @@ Semua credentials disimpan di `.superi_config.json` (tidak di-commit ke git):
 ```json
 {
   "nip": "NIP_ANDA",
-  "password": "PASSWORD_SUPERI",
+  "password": "<PASSWORD>",
   "gi_id": "222",
   "portal_url": "http://10.3.187.6/apdjakarta",
   "portal_user": "username.portal",
-  "portal_password": "PASSWORD_PORTAL",
+  "portal_password": "<PASSWORD>",
   "portal_gi_id": "143"
 }
 ```
 
 Atau via environment variables:
 ```bash
-export SUPERI_NIP=15021JKT
-export SUPERI_PASSWORD=***
-export PORTAL_USER=julian.sudibyo
-export PORTAL_PASSWORD=***
+export SUPERI_NIP=NIP_ANDA
+export SUPERI_PASSWORD=<PASSWORD>
+export PORTAL_USER=username.portal
+export PORTAL_PASSWORD=<PASSWORD>
 ```
 
 ---

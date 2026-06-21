@@ -354,7 +354,7 @@ def delete_entry(token: str, data_type: str, entry_id: int):
 
 def main():
     parser = argparse.ArgumentParser(description="SUPER-I APP Data Input Tool")
-    parser.add_argument("--nip", default=os.environ.get("SUPERI_NIP", "15021JKT"), help="NIP")
+    parser.add_argument("--nip", default=os.environ.get("SUPERI_NIP", ""), help="NIP")
     parser.add_argument("--pass", default=os.environ.get("SUPERI_PASS", ""), dest="password", help="Password (atau set env SUPERI_PASS)")
     parser.add_argument("--type", choices=["beban-penyulang", "beban-trafo", "tegangan-trafo"], help="Tipe data")
     parser.add_argument("--gi", type=int, default=222, help="Gardu Induk ID")
