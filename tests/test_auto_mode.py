@@ -87,6 +87,8 @@ class WindowsLauncherStaticTests(unittest.TestCase):
 
     def test_launcher_sets_project_pythonpath(self):
         self.assertIn('set "PYTHONPATH=%SUPERI_DIR%;%PYTHONPATH%"', self.bat)
+        self.assertIn('set "PYTHONUTF8=1"', self.bat)
+        self.assertIn('set "PYTHONIOENCODING=utf-8"', self.bat)
 
     def test_launcher_preflights_core_imports(self):
         self.assertIn("import requests, flask, bs4, superi_sync, superi_auto", self.bat)

@@ -7,6 +7,8 @@ REM ============================================================
 setlocal enabledelayedexpansion
 set "SUPERI_DIR=%~dp0"
 set "SUPERI_CMD=%~1"
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
 
 REM Cari Python: prioritas portable (python\), lalu venv, lalu system
 if exist "%SUPERI_DIR%python\python.exe" (

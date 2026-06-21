@@ -39,6 +39,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+_stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
+if _stdout_reconfigure:
+    _stdout_reconfigure(encoding="utf-8", errors="replace")
+_stderr_reconfigure = getattr(sys.stderr, "reconfigure", None)
+if _stderr_reconfigure:
+    _stderr_reconfigure(encoding="utf-8", errors="replace")
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
@@ -54,7 +61,10 @@ LOG_FILE = os.path.join(SCRIPT_DIR, "auto_log.txt")
 def log(msg, level="INFO"):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] [{level}] {msg}"
-    print(line)
+    try:
+        print(line)
+    except UnicodeEncodeError:
+        print(line.encode("ascii", "replace").decode("ascii"))
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
