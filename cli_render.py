@@ -156,14 +156,11 @@ def render_suggest_table(rows):
 
 def render_summary_box(success, fail, total, label):
     """Boxed one-line summary of a batch submit result."""
-    bar = "━" * 46
     inner = f"  Ringkasan {label}: ✓ {success} berhasil"
     if fail:
         inner += f"  ✗ {fail} gagal"
     inner += f"  ({success}/{total})"
-    # right-pad inner to box width for a clean right border
-    width = 46
-    inner = inner[:width].ljust(width)
+    bar = "━" * len(inner)
     return "\n".join([
         f"  ┏{bar}┓",
         f"  ┃{inner}┃",
