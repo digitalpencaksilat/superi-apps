@@ -29,6 +29,28 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".superi_
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
+
+try:
+    import cli_render as ui
+except Exception:  # pragma: no cover - fallback if module missing
+    ui = None
+
+
+def _enable_win_vt100():
+    """Enable VT100 escape processing on Windows 10+ so \\r + ANSI colors work."""
+    if sys.platform != 'win32':
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_ulong()
+        kernel32.GetConsoleMode(handle, ctypes.byref(mode))
+        # ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+    except Exception:
+        pass  # older Windows — \r still works, ANSI colors may degrade
+
 # Fallback: kalau di project folder tidak ada, cek home (~/.superi_config.json)
 _HOME_CONFIG = os.path.expanduser("~/.superi_config.json")
 
@@ -664,21 +686,16 @@ def input_single(token, data_type, gi_id, date_str, user_info):
     header(f"✏  INPUT {ep['label']}")
     print()
     
-    # Tampilkan daftar item
-    for i, item in enumerate(items, 1):
-        nama = item.get("nama", "?")
-        item_id = item.get("id", "?")
-        data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
-        entries = item.get(data_key, [])
-        periods = [e["periode"] for e in entries]
-        empty = [p for p in range(24) if p not in periods]
-        
-        # Tandai CB OFF - skip untuk input
-        cb_off = item.get('statusCB') == 'OFF'
-        tag = " ⛔ CB OFF - SKIP" if cb_off else ""
-        print(f"  [{i}] {nama} (ID:{item_id}) - {len(periods)}/24 terisi{tag}")
-        if empty and not cb_off:
-            print(f"      Kosong: {empty}")
+    # Tampilkan daftar item (aligned table)
+    if ui:
+        for ln in ui.render_item_table(items, data_type):
+            print(ln)
+    else:
+        for i, item in enumerate(items, 1):
+            nama = item.get("nama", "?")
+            data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
+            periods = [e["periode"] for e in item.get(data_key, [])]
+            print(f"  [{i}] {nama} - {len(periods)}/24")
     print()
     
     try:
@@ -709,21 +726,19 @@ def input_single(token, data_type, gi_id, date_str, user_info):
     empty_periods = [p for p in range(24) if p not in periods_filled]
     
     print(f"\n  Target: {nama} (ID:{item_id})")
-    
-    # Tampilkan data existing untuk referensi
+
+    # Tampilkan data existing (compact)
     if entries:
-        print(f"  Data existing:")
-        if data_type == "tegangan-trafo":
-            for e in sorted(entries, key=lambda x: x["periode"]):
-                print(f"    P{e['periode']:02d}: HV={e['hv']}kV, MV={e['mv']}kV")
+        print(f"  {C['D']}Data existing:{C['R']}")
+        if ui:
+            for ln in ui.render_existing_data(entries, data_type):
+                print(ln)
         else:
             for e in sorted(entries, key=lambda x: x["periode"]):
-                print(f"    P{e['periode']:02d}: {e['beban']}A")
-        
-        if data_type == "beban-penyulang" or data_type == "beban-trafo":
-            values = [e["beban"] for e in entries]
-            avg = sum(values) / len(values)
-            print(f"    Range: {min(values)}-{max(values)}A | Rata2: {avg:.0f}A")
+                if data_type == "tegangan-trafo":
+                    print(f"    P{e['periode']:02d}: HV={e['hv']}kV, MV={e['mv']}kV")
+                else:
+                    print(f"    P{e['periode']:02d}: {e['beban']}A")
     
     if not empty_periods:
         print(f"\n  ✓ Semua periode sudah terisi (24/24)!")
@@ -767,12 +782,14 @@ def input_single(token, data_type, gi_id, date_str, user_info):
             print(f"    → Saran dari P{prev_entry['periode']:02d}: MV={prev_mv}kV, HV={prev_hv}kV")
     else:
         # Beban: SMART SUGGEST (weekday/weekend aware)
-        print(f"    🧠 Menganalisis pola 14 hari...")
+        sys.stdout.write(f"    🧠 Menganalisis pola 14 hari... ")
+        sys.stdout.flush()
         smart_val, info = smart_suggest_value(token, data_type, item_id, per, date_str)
         if smart_val is not None:
             suggested = f" [smart: {smart_val}A]"
-            print(f"    → Smart suggest: {smart_val}A ({info})")
+            sys.stdout.write(f"\r    {C['G']}✓{C['R']} Smart suggest: {smart_val}A ({info}){' ' * 6}\n")
         else:
+            sys.stdout.write(f"\r    {C['Y']}•{C['R']} Smart suggest tidak tersedia{' ' * 6}\n")
             # Fallback ke periode sebelumnya
             if entries:
                 sorted_entries = sorted(entries, key=lambda x: x["periode"])
@@ -789,14 +806,14 @@ def input_single(token, data_type, gi_id, date_str, user_info):
                 suggested = f" [tidak ada data]"
     
     if data_type == "tegangan-trafo":
-        mv_str = input(f"  MV (kV) [suggested: {suggested_mv}]: ").strip()
+        mv_str = input(f"  {C['B']}{'MV (kV)':<14}{C['R']} [{suggested_mv}]: ").strip()
         mv = float(mv_str) if mv_str else float(suggested_mv)
-        hv_str = input(f"  HV (kV) [suggested: {suggested_hv}]: ").strip()
+        hv_str = input(f"  {C['B']}{'HV (kV)':<14}{C['R']} [{suggested_hv}]: ").strip()
         hv = float(hv_str) if hv_str else float(suggested_hv)
         value = mv
         extra_values = {"hv": hv}
     else:
-        val_str = input(f"  Nilai (Ampere){suggested}: ").strip()
+        val_str = input(f"  {C['B']}{'Nilai (A)':<14}{C['R']}{suggested}: ").strip()
         if not val_str and suggested:
             val_str = suggested.split(": ")[1].replace("A]", "")
         value = float(val_str)
@@ -903,15 +920,15 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
     header(f"⚡ BATCH FILL · {ep['label']}")
     print()
     
-    for i, item in enumerate(items, 1):
-        data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
-        entries = item.get(data_key, [])
-        periods = [e["periode"] for e in entries]
-        empty = [p for p in range(24) if p not in periods]
-        cb_off = item.get('statusCB') == 'OFF'
-        tag = " ⛔ SKIP" if cb_off else ""
-        print(f"  [{i}] {item['nama']} - {len(periods)}/24, kosong: {empty if empty else '∅'}{tag}")
-    
+    if ui:
+        for ln in ui.render_item_table(items, data_type):
+            print(ln)
+    else:
+        for i, item in enumerate(items, 1):
+            data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
+            periods = [e["periode"] for e in item.get(data_key, [])]
+            print(f"  [{i}] {item['nama']} - {len(periods)}/24")
+
     print()
     try:
         idx = int(input("  Pilih nomor item: ").strip()) - 1
@@ -1002,7 +1019,9 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
         
         dt = datetime.strptime(date_str, "%Y-%m-%d")
         success = 0
-        for per in valid_periods:
+        fail = 0
+        total = len(valid_periods)
+        for i, per in enumerate(valid_periods, 1):
             mv, hv, _ = teg_suggestions[per]
             data_dict = {
                 ep["id_field"]: item["id"],
@@ -1018,14 +1037,20 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
                 "fotoMV": {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
             }
             status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
-            if result.get("success"):
+            ok = result.get("success")
+            detail = f"MV={mv} HV={hv}" if ok else str(result.get("message", "?"))[:30]
+            if ui:
+                sys.stdout.write("\r" + ui.fmt_progress_line(i, total, f"P{per:02d}", ok=ok, detail=detail))
+                sys.stdout.flush()
+            if ok:
                 success += 1
-                print(f"    P{per:02d} ✓ MV={mv} HV={hv}")
             else:
-                msg = result.get("message", "?")
-                print(f"    P{per:02d} ✗ ({msg[:50]})")
-        
-        print(f"\n  ✓ {success}/{len(valid_periods)} berhasil!")
+                fail += 1
+        if ui:
+            sys.stdout.write("\n")
+        print()
+        print(ui.render_summary_box(success, fail, total, "tegangan") if ui
+              else f"  ✓ {success}/{total} berhasil!")
         
         # Tawarkan sync ke Portal PLN
         if success > 0:
@@ -1051,12 +1076,14 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
             val_str = input(f"  Nilai (Ampere): ").strip()
             value = float(val_str)
     
-    if not confirm(f"\n  Isi {len(empty_periods)} periode dgn nilai {mv if data_type == 'tegangan-trafo' else value}{ep['unit']}?"):
+    if not confirm(f"\n  Isi {len(empty_periods)} periode dgn nilai {value}{ep['unit']}?"):
         return
-    
+
     dt = datetime.strptime(date_str, "%Y-%m-%d")
     success = 0
-    for per in empty_periods:
+    fail = 0
+    total = len(empty_periods)
+    for i, per in enumerate(empty_periods, 1):
         data_dict = {
             ep["id_field"]: item["id"],
             "timezone": "Asia/Jakarta",
@@ -1065,24 +1092,24 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
             "bulan": dt.month - 1,
             "tahun": dt.year,
             "durasi": 0.1,
-            ep["value_field"]: mv if data_type == "tegangan-trafo" else value,
+            ep["value_field"]: value,
+            "foto": {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
         }
-        if data_type == "tegangan-trafo":
-            data_dict["hv"] = hv
-            data_dict["fotoHV"] = {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-            data_dict["fotoMV"] = {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-        else:
-            data_dict["foto"] = {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-        
         status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
-        if result.get("success"):
+        ok = result.get("success")
+        detail = f"{value}A" if ok else str(result.get("message", "?"))[:30]
+        if ui:
+            sys.stdout.write("\r" + ui.fmt_progress_line(i, total, f"P{per:02d}", ok=ok, detail=detail))
+            sys.stdout.flush()
+        if ok:
             success += 1
-            print(f"    P{per:02d} ✓")
         else:
-            msg = result.get("message", "?")
-            print(f"    P{per:02d} ✗ ({msg[:50]})")
-    
-    print(f"\n  ✓ {success}/{len(empty_periods)} berhasil!")
+            fail += 1
+    if ui:
+        sys.stdout.write("\n")
+    print()
+    print(ui.render_summary_box(success, fail, total, "beban") if ui
+          else f"  ✓ {success}/{total} berhasil!")
     
     # Tawarkan sync ke Portal PLN
     if success > 0:
@@ -1126,20 +1153,18 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
                 empty_items.append(it)
         empty_by_periode[p] = empty_items
     
-    # Tampilkan grid periode
-    print("\n  Periode | Kosong | Status")
-    print("  " + "─" * 40)
-    has_empty = False
-    for p in range(24):
-        count = len(empty_by_periode[p])
-        if count > 0:
-            has_empty = True
+    # Tampilkan grid periode (hanya yang masih kosong)
+    empty_periods_list = [p for p in range(24) if empty_by_periode[p]]
+    full_count = 24 - len(empty_periods_list)
+    print(f"\n  {C['D']}Periode kosong ({len(empty_periods_list)} jam) — {full_count} jam sudah penuh{C['R']}")
+    if empty_periods_list:
+        print("  " + "─" * 40)
+        for p in empty_periods_list:
+            count = len(empty_by_periode[p])
             print(f"  P{p:02d}:00  | {count:3d} item | ⚡ Bisa batch")
-        else:
-            print(f"  P{p:02d}:00  |   0 item | ✓ Penuh")
-    
-    if not has_empty:
-        print("\n  ✓ Semua periode sudah penuh!")
+
+    if not empty_periods_list:
+        print(f"\n  {C['G']}✓ Semua periode sudah penuh!{C['R']}")
         input(f"  {C['D']}[Enter]{C['R']}")
         return
     
@@ -1178,27 +1203,32 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
             val, info = smart_suggest_from_cache(cache, it["id"], per, is_weekend)
             suggestions[it["id"]] = (val, info)
     
-    # Tampilkan tabel dengan suggest
-    print(f"\n  {'No':<4}{'Nama':<20}{'Suggest':<12}{'Info'}")
-    print(f"  {'─' * 55}")
-    
+    # Bangun rows suggest lalu render tabel sekali (aligned)
+    suggest_rows = []
     for i, it in enumerate(empty_items, 1):
-        nama = it["nama"][:18]
         if data_type == "tegangan-trafo":
-            # Smart suggest tegangan per-periode dari histori (rata-rata, BUKAN copy periode sebelumnya)
             mv, hv, info = smart_suggest_tegangan_from_cache(cache, it["id"], per, is_weekend)
             if mv is not None:
-                print(f"  {i:<4}{nama:<20}MV={mv} HV={hv}  {info}")
+                suggest_rows.append((i, it["nama"], f"MV={mv} HV={hv}", info))
                 suggestions[it["id"]] = (mv, hv)
             else:
-                print(f"  {i:<4}{nama:<20}?           (tidak ada histori)")
+                suggest_rows.append((i, it["nama"], "?", "(tidak ada histori)"))
                 suggestions[it["id"]] = (None, None)
         else:
             val, info = suggestions.get(it["id"], (None, None))
             if val is not None:
-                print(f"  {i:<4}{nama:<20}{val:>5}A      {info}")
+                suggest_rows.append((i, it["nama"], f"{val}A", info))
             else:
-                print(f"  {i:<4}{nama:<20}    ?A      (tidak ada data)")
+                suggest_rows.append((i, it["nama"], "?A", "(tidak ada data)"))
+
+    print()
+    if ui:
+        for ln in ui.render_suggest_table(suggest_rows):
+            print(ln)
+    else:
+        print(f"  {'No':<4}{'Nama':<18}{'Suggest':<14}Info")
+        for no, nama, val, info in suggest_rows:
+            print(f"  {no:<4}{str(nama)[:18]:<18}{val:<14}{info}")
     
     # Konfirmasi / edit
     print(f"\n  {'─' * 55}")
@@ -1246,14 +1276,15 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
         input(f"  {C['D']}[Enter]{C['R']}")
         return
     
-    # Submit semua
+    # Submit semua (live progress)
     dt = datetime.strptime(date_str, "%Y-%m-%d")
     success = 0
     fail = 0
-    
-    for it in valid_items:
+    total = len(valid_items)
+    failures = []  # (nama, reason)
+
+    for i, it in enumerate(valid_items, 1):
         s = suggestions[it["id"]]
-        
         data_dict = {
             ep["id_field"]: it["id"],
             "timezone": "Asia/Jakarta",
@@ -1263,32 +1294,48 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
             "tahun": dt.year,
             "durasi": 0.1,
         }
-        
         if data_type == "tegangan-trafo":
             mv_val, hv_val = s
             data_dict[ep["value_field"]] = mv_val
             data_dict["hv"] = hv_val
             data_dict["fotoHV"] = {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
             data_dict["fotoMV"] = {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+            detail = f"MV={mv_val} HV={hv_val}"
         else:
             value = s[0]
             data_dict[ep["value_field"]] = value
             data_dict["foto"] = {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-        
+            detail = f"{value}A"
+
         try:
             status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
-            if result.get("success"):
-                success += 1
-                print(f"    ✓ {it['nama']}")
-            else:
-                fail += 1
-                print(f"    ✗ {it['nama']}: {result.get('message', 'error')}")
+            ok = result.get("success")
+            if not ok:
+                reason = str(result.get("message", "error"))[:30]
+                failures.append((it["nama"], reason))
+                detail = reason
         except Exception as e:
+            ok = False
+            failures.append((it["nama"], str(e)[:30]))
+            detail = str(e)[:30]
+
+        if ui:
+            sys.stdout.write("\r" + ui.fmt_progress_line(i, total, it["nama"][:10], ok=ok, detail=detail))
+            sys.stdout.flush()
+        if ok:
+            success += 1
+        else:
             fail += 1
-            print(f"    ✗ {it['nama']}: {e}")
-    
-    print(f"\n  {C['C']}{'━' * 40}{C['R']}")
-    print(f"\n  {C['B']}Ringkasan:{C['R']} {C['G']}✓ {success} berhasil{C['R']}" + (f"  {C['RE']}✗ {fail} gagal{C['R']}" if fail else ""))
+    if ui:
+        sys.stdout.write("\n")
+
+    # Detail failures (di baris sendiri agar tidak tertimpa \r)
+    for nama, reason in failures:
+        print(f"  {C['RE']}✗ {nama}: {reason}{C['R']}")
+
+    print()
+    print(ui.render_summary_box(success, fail, total, ep["label"]) if ui
+          else f"\n  Ringkasan: ✓ {success} berhasil" + (f"  ✗ {fail} gagal" if fail else ""))
     
     # Tawarkan sync ke Portal PLN (periode tunggal: per)
     if success > 0:
@@ -1611,6 +1658,8 @@ def main():
     
     date_str = datetime.now().strftime("%Y-%m-%d")
     
+    _enable_win_vt100()   # Windows VT100 for \r live-progress
+
     while True:
         clear()
         header("⚡ SUPER-I APP  ·  Data Input & Sync Tool")

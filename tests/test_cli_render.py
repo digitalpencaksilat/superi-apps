@@ -173,5 +173,14 @@ class FmtProgressLineTests(unittest.TestCase):
         self.assertEqual(len(s), 42)
 
 
+class SuperiAppImportTests(unittest.TestCase):
+    def test_imports_with_cli_render(self):
+        import importlib
+        sa = importlib.import_module("superi_app")
+        self.assertTrue(hasattr(sa, "ui"))
+        self.assertIsNotNone(sa.ui)
+        self.assertTrue(hasattr(sa, "_enable_win_vt100"))
+
+
 if __name__ == "__main__":
     unittest.main()
