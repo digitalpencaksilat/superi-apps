@@ -173,6 +173,76 @@ class FmtProgressLineTests(unittest.TestCase):
         self.assertEqual(len(s), 42)
 
 
+class RenderDataViewTests(unittest.TestCase):
+    def _beban_items(self):
+        return [
+            {"id": 11, "nama": "CIBADAK", "statusCB": "ON", "iMax": 400,
+             "beban": [{"periode": p, "beban": 100} for p in range(18)]},
+            {"id": 22, "nama": "TEBET BARAT", "statusCB": "OFF", "iMax": 300,
+             "beban": []},
+        ]
+
+    def _teg_items(self):
+        return [
+            {"id": 1, "nama": "TRAFO 1", "isPS": False,
+             "tegangan": [{"periode": 0, "mv": 20, "hv": 150}]},
+        ]
+
+    def test_returns_lines_with_header(self):
+        lines = r.render_data_view(self._beban_items(), "beban-penyulang")
+        self.assertIsInstance(lines, list)
+        self.assertTrue(any("No" in ln and "Nama" in ln for ln in lines))
+
+    def test_fill_strip_present(self):
+        lines = r.render_data_view(self._beban_items(), "beban-penyulang")
+        self.assertTrue(any("█" in ln or "░" in ln for ln in lines))
+
+    def test_terisi_column_aligned(self):
+        lines = r.render_data_view(self._beban_items(), "beban-penyulang")
+        positions = [ln.index("/24") for ln in lines
+                     if "/24" in ln and ("█" in ln or "░" in ln)]
+        self.assertGreater(len(positions), 1)
+        self.assertEqual(len(set(positions)), 1,
+                         f"/24 columns misaligned: {positions}")
+
+    def test_cb_off_shows_note_no_kosong(self):
+        lines = r.render_data_view(self._beban_items(), "beban-penyulang")
+        off_detail = [ln for ln in lines if "CB OFF" in ln and "→" in ln]
+        self.assertTrue(off_detail)
+        self.assertFalse(any("Kosong:" in ln for ln in off_detail))
+
+    def test_tegangan_shows_mv_hv(self):
+        lines = r.render_data_view(self._teg_items(), "tegangan-trafo")
+        self.assertTrue(any("MV:" in ln and "HV:" in ln for ln in lines))
+
+    def test_tegangan_has_type_column(self):
+        lines = r.render_data_view(self._teg_items(), "tegangan-trafo")
+        self.assertTrue(any("Type" in ln for ln in lines))
+        self.assertTrue(any("GI" in ln for ln in lines))
+
+    def test_detail_line_indented_with_arrow(self):
+        lines = r.render_data_view(self._beban_items(), "beban-penyulang")
+        self.assertTrue(any(ln.strip().startswith("→") for ln in lines))
+
+    def test_range_in_detail_for_beban(self):
+        lines = r.render_data_view(self._beban_items(), "beban-penyulang")
+        self.assertTrue(any("Range:" in ln and "Rata2:" in ln for ln in lines))
+
+
+class RenderDataSummaryTests(unittest.TestCase):
+    def test_contains_counts(self):
+        s = r.render_data_summary(3, 27, 45)
+        self.assertIn("3", s)
+        self.assertIn("27", s)
+        self.assertIn("45", s)
+        self.assertIn("72", s)  # 3*24
+
+    def test_format(self):
+        s = r.render_data_summary(2, 48, 0)
+        self.assertIn("2 item", s)
+        self.assertIn("48/48", s)
+
+
 class SuperiAppImportTests(unittest.TestCase):
     def test_imports_with_cli_render(self):
         import importlib

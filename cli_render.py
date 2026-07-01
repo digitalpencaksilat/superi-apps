@@ -179,3 +179,94 @@ def fmt_progress_line(n, total, label, ok=True, detail=""):
     # pad to ~42 chars so short labels overwrite longer previous ones
     base = f"{fmt_progress(n, total)} {label} {mark}{tail}"
     return base.ljust(42)[:42]
+
+
+# Column widths for render_data_view
+_DATA_NAMA_W = 20
+_DATA_IMAX_W = 5
+_DATA_CB_W = 4
+_DATA_TYPE_W = 4
+_STRIP_HDR = "Strip (24 jam)"
+
+
+def render_data_view(items, data_type):
+    """Return aligned lines for the 'Lihat Data' view with 24-slot fill strips.
+
+    Per item: one table row (No | Nama | iMax+CB or Type | Terisi | Strip)
+    plus an indented detail line with value ranges and kosong ranges.
+    CB-OFF beban items show a "CB OFF" note instead of kosong ranges.
+    """
+    key = _data_key(data_type)
+    is_teg = data_type == "tegangan-trafo"
+    strip_col = _pad(_STRIP_HDR, 24)
+    lines = []
+
+    if is_teg:
+        header = (f"  {_pad('No', 2)}  {_pad('Nama', _DATA_NAMA_W)}  "
+                  f"{_pad('Type', _DATA_TYPE_W)}  "
+                  f"{_rpad('Terisi', _TERISI_W)}  {strip_col}")
+    else:
+        header = (f"  {_pad('No', 2)}  {_pad('Nama', _DATA_NAMA_W)}  "
+                  f"{_pad('iMax', _DATA_IMAX_W)}  {_pad('CB', _DATA_CB_W)}  "
+                  f"{_rpad('Terisi', _TERISI_W)}  {strip_col}")
+    lines.append(header)
+    lines.append("  " + "─" * len(header))
+
+    for i, item in enumerate(items, 1):
+        nama = _truncate(item.get("nama", "?"), _DATA_NAMA_W)
+        entries = item.get(key, [])
+        periods = sorted(e["periode"] for e in entries)
+        empty = [p for p in range(24) if p not in periods]
+        strip = fmt_fill_strip(periods)
+        terisi = f"{len(periods)}/24"
+        cb_off = item.get("statusCB") == "OFF"
+
+        if is_teg:
+            type_label = "PS" if item.get("isPS") else "GI"
+            lines.append(f"  {i:<2}  {nama:<{_DATA_NAMA_W}}  "
+                         f"{type_label:<{_DATA_TYPE_W}}  "
+                         f"{terisi:>{_TERISI_W}}  {strip}")
+        else:
+            i_max = item.get("iMax", "?")
+            i_max_str = f"{i_max}A" if i_max != "?" else "?"
+            cb = "OFF" if cb_off else "ON"
+            lines.append(f"  {i:<2}  {nama:<{_DATA_NAMA_W}}  "
+                         f"{i_max_str:<{_DATA_IMAX_W}}  {cb:<{_DATA_CB_W}}  "
+                         f"{terisi:>{_TERISI_W}}  {strip}")
+
+        # Detail line (indented)
+        details = []
+        if not is_teg:
+            trafo = item.get("trafo", {}).get("nama", "")
+            if trafo:
+                details.append(f"TRAFO: {trafo}")
+
+        if entries:
+            if is_teg:
+                mv_vals = [e["mv"] for e in entries]
+                hv_vals = [e["hv"] for e in entries]
+                details.append(
+                    f"MV: {min(mv_vals):.1f}-{max(mv_vals):.1f}kV · "
+                    f"HV: {min(hv_vals)}-{max(hv_vals)}kV")
+            else:
+                vals = [e["beban"] for e in entries]
+                avg = sum(vals) / len(vals)
+                details.append(f"Range: {min(vals)}-{max(vals)}A · Rata2: {avg:.0f}A")
+
+        if cb_off and not is_teg:
+            details.append("CB OFF — tidak ada arus")
+        elif empty:
+            details.append(f"Kosong: {fmt_empty_ranges(empty)}")
+
+        if details:
+            lines.append(f"      → {' · '.join(details)}")
+
+    return lines
+
+
+def render_data_summary(total_items, total_filled, total_empty):
+    """One-line footer summary for the 'Lihat Data' view."""
+    total_slots = total_items * 24
+    return (f"  Total: {total_items} item · "
+            f"{total_filled}/{total_slots} periode terisi · "
+            f"{total_empty} masih kosong")

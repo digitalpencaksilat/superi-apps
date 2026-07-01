@@ -632,39 +632,22 @@ def show_data(token, data_type, gi_id, date_str):
     header(f"📊 {ep['label']} · {date_str}")
     print()
     
-    for item in items:
-        nama = item.get("nama", "?")
-        item_id = item.get("id", "?")
+    if ui:
+        for ln in ui.render_data_view(items, data_type):
+            print(ln)
+        # Footer summary
         data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
-        entries = item.get(data_key, [])
-        periods = sorted([e["periode"] for e in entries])
-        empty = [p for p in range(24) if p not in periods]
-        
-        if data_type == "tegangan-trafo":
-            is_ps = "PS" if item.get("isPS") else "GI"
-            if entries:
-                mv_vals = [e["mv"] for e in entries]
-                hv_vals = [e["hv"] for e in entries]
-                print(f"  [{item_id}] {nama} ({is_ps}) | MV:{min(mv_vals):.1f}-{max(mv_vals):.1f}kV HV:{min(hv_vals)}-{max(hv_vals)}kV | {len(periods)}/24")
-            else:
-                print(f"  [{item_id}] {nama} ({is_ps}) | 0/24")
-        else:
-            i_max = item.get("iMax", "?")
-            trafo = item.get("trafo", {}).get("nama", "")
-            status = item.get("statusCB", "")
-            extra = f"iMax={i_max}A"
-            if trafo:
-                extra += f" | {trafo}"
-            if status:
-                extra += f" | CB={status}"
-            if entries:
-                values = [e["beban"] for e in entries]
-                print(f"  [{item_id}] {nama} ({extra}) | {min(values)}-{max(values)}A | {len(periods)}/24")
-            else:
-                print(f"  [{item_id}] {nama} ({extra}) | 0/24")
-        
-        if empty:
-            print(f"       Kosong: {empty}")
+        total_filled = sum(len(it.get(data_key, [])) for it in items)
+        total_empty = len(items) * 24 - total_filled
+        print()
+        print(f"  {C['D']}{ui.render_data_summary(len(items), total_filled, total_empty)}{C['R']}")
+    else:
+        for item in items:
+            nama = item.get("nama", "?")
+            data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
+            entries = item.get(data_key, [])
+            periods = sorted([e["periode"] for e in entries])
+            print(f"  [{item.get('id', '?')}] {nama} - {len(periods)}/24")
     
     print()
     input(f"  {C['D']}[Enter untuk kembali...]{C['R']}")
