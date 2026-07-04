@@ -102,29 +102,51 @@ def _round_mv(name: str, mv_avg: float):
     return rounded
 
 
-def learn_pattern(token, gi_id, data_type, item_id, days_back=7):
+def learn_pattern(token, gi_id, data_type, item_id, days_back=14):
     """
-    Belajar pola beban per periode dari data historis.
-    Return dict: {periode: {avg, min, max, samples}}
+    Belajar pola beban/tegangan per periode dari data historis (14 hari).
+    PARITY dengan CLI superior_app.py smart_suggest_from_cache / smart_suggest_tegangan_from_cache.
+
+    Perbedaan dari versi lama:
+    - 14 hari (bukan 7)
+    - Weekday/weekend aware (50% pattern + 50% base)
+    - Round kelipatan 5 untuk beban, aturan trafo untuk tegangan MV
+    - Clamp ke range histori pattern
+    - Fallback: kalau periode target kosong, pakai rata-rata semua periode
+
+    Return dict: {periode: {avg, min, max, samples, ...}}
     """
     from collections import defaultdict
     from datetime import datetime, timedelta
-    
+    from concurrent.futures import ThreadPoolExecutor
+
     paths = {
         "beban-penyulang": "/gama/opgi-20kv/operator-gi/beban-penyulang",
         "beban-trafo": "/gama/opgi-20kv/operator-gi/beban-trafo",
         "tegangan-trafo": "/gama/opgi-20kv/operator-gi/tegangan-trafo",
     }
-    
+    path = paths[data_type]
+
     today = datetime.now()
-    pattern = defaultdict(lambda: {"values": [], "mv_values": [], "hv_values": []})
+    is_target_weekend = today.weekday() >= 5
+
+    # Build cache per-periode: {periode: {all: [], weekday: [], weekend: []}}
+    pattern = defaultdict(lambda: {
+        "all": [], "weekday": [], "weekend": [],
+        "mv_all": [], "mv_weekday": [], "mv_weekend": [],
+        "hv_all": [], "hv_weekday": [], "hv_weekend": [],
+    })
     item_name = ""
-    
-    for offset in range(1, days_back + 1):
-        date_str = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
-        result = api_get(token, paths[data_type], {"garduIndukId": gi_id, "date": date_str})
+
+    def fetch_day(offset):
+        d = today - timedelta(days=offset)
+        return d.weekday() >= 5, api_get(token, path, {"garduIndukId": gi_id, "date": d.strftime("%Y-%m-%d")})
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(fetch_day, range(1, days_back + 1)))
+
+    for is_weekend, result in results:
         items = result.get("data", {}).get("items", [])
-        
         for it in items:
             if it["id"] != item_id:
                 continue
@@ -132,47 +154,141 @@ def learn_pattern(token, gi_id, data_type, item_id, days_back=7):
                 item_name = it.get("nama", "")
             if data_type == "tegangan-trafo":
                 for e in it.get("tegangan", []):
-                    pattern[e["periode"]]["mv_values"].append(e["mv"])
-                    pattern[e["periode"]]["hv_values"].append(e["hv"])
+                    p = e["periode"]
+                    pattern[p]["mv_all"].append(e["mv"])
+                    pattern[p]["hv_all"].append(e["hv"])
+                    if is_weekend:
+                        pattern[p]["mv_weekend"].append(e["mv"])
+                        pattern[p]["hv_weekend"].append(e["hv"])
+                    else:
+                        pattern[p]["mv_weekday"].append(e["mv"])
+                        pattern[p]["hv_weekday"].append(e["hv"])
             else:
+                if it.get("statusCB") == "OFF":
+                    continue
                 for e in it.get("beban", []):
-                    pattern[e["periode"]]["values"].append(e["beban"])
-    
-    # Hitung statistik per periode
+                    p = e["periode"]
+                    val = e["beban"]
+                    pattern[p]["all"].append(val)
+                    if is_weekend:
+                        pattern[p]["weekend"].append(val)
+                    else:
+                        pattern[p]["weekday"].append(val)
+
+    # Hitung smart suggest per periode
     result = {}
     for periode, data in pattern.items():
         if data_type == "tegangan-trafo":
-            mvs = data["mv_values"]
-            hvs = data["hv_values"]
-            if mvs:
-                mv_avg_raw = sum(mvs) / len(mvs)
-                hv_avg_raw = sum(hvs) / len(hvs)
-                # Aturan pembulatan
-                mv_rounded = _round_mv(item_name, mv_avg_raw)
-                # HV: untuk PS pakai 2 desimal (sisi 20kV), lainnya integer (~150kV)
+            all_mv = data["mv_all"]
+            all_hv = data["hv_all"]
+            if not all_mv:
+                continue
+            if is_target_weekend:
+                pat_mv = data["mv_weekend"] if data["mv_weekend"] else all_mv
+                pat_hv = data["hv_weekend"] if data["hv_weekend"] else all_hv
+            else:
+                pat_mv = data["mv_weekday"] if data["mv_weekday"] else all_mv
+                pat_hv = data["hv_weekday"] if data["hv_weekday"] else all_hv
+
+            # MV: 50% pattern + 50% base
+            base_mv = sum(all_mv) / len(all_mv)
+            pattern_mv = sum(pat_mv) / len(pat_mv)
+            smart_mv = 0.5 * pattern_mv + 0.5 * base_mv
+            smart_mv = _round_mv(item_name, smart_mv)
+            # Clamp ke range pattern
+            if pat_mv:
+                smart_mv = max(min(pat_mv), min(max(pat_mv), smart_mv))
+                smart_mv = _round_mv(item_name, smart_mv)
+
+            # HV: PS → 2 desimal, lainnya integer
+            if "PS" in (item_name or "").upper():
+                base_hv = sum(all_hv) / len(all_hv)
+                pattern_hv = sum(pat_hv) / len(pat_hv)
+                smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
+                smart_hv = round(smart_hv, 2)
+                if pat_hv:
+                    smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
+                    smart_hv = round(smart_hv, 2)
+            else:
+                base_hv = sum(all_hv) / len(all_hv)
+                pattern_hv = sum(pat_hv) / len(pat_hv)
+                smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
+                smart_hv = round(smart_hv)
+                if pat_hv:
+                    smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
+                smart_hv = int(smart_hv)
+
+            result[periode] = {
+                "mv_avg": smart_mv,
+                "mv_min": min(all_mv), "mv_max": max(all_mv),
+                "hv_avg": smart_hv,
+                "hv_min": min(all_hv), "hv_max": max(all_hv),
+                "samples": len(all_mv),
+                "pattern_type": "weekend" if is_target_weekend else "weekday",
+            }
+        else:
+            all_vals = data["all"]
+            if not all_vals:
+                continue
+            if is_target_weekend:
+                pat_vals = data["weekend"] if data["weekend"] else all_vals
+            else:
+                pat_vals = data["weekday"] if data["weekday"] else all_vals
+
+            base_avg = sum(all_vals) / len(all_vals)
+            pattern_avg = sum(pat_vals) / len(pat_vals)
+            smart_avg = 0.5 * pattern_avg + 0.5 * base_avg
+            suggested = round(smart_avg / 5) * 5
+            if pat_vals:
+                suggested = max(min(pat_vals), min(max(pat_vals), suggested))
+
+            result[periode] = {
+                "avg": int(suggested),
+                "raw_avg": round(smart_avg, 1),
+                "min": min(all_vals), "max": max(all_vals),
+                "samples": len(all_vals),
+                "pattern_type": "weekend" if is_target_weekend else "weekday",
+                "pattern_avg": round(pattern_avg, 1),
+                "pattern_samples": len(pat_vals),
+            }
+
+    # Fallback: kalau ada periode yang kosong (tidak ada histori), isi dengan rata-rata semua periode
+    if not result:
+        # Coba kumpulkan semua nilai dari semua periode
+        if data_type == "tegangan-trafo":
+            all_mvs = []
+            all_hvs = []
+            for pdata in pattern.values():
+                all_mvs.extend(pdata["mv_all"])
+                all_hvs.extend(pdata["hv_all"])
+            if all_mvs:
+                mv_fb = _round_mv(item_name, sum(all_mvs) / len(all_mvs))
+                mv_fb = max(min(all_mvs), min(max(all_mvs), mv_fb))
+                mv_fb = _round_mv(item_name, mv_fb)
                 if "PS" in (item_name or "").upper():
-                    hv_rounded = round(hv_avg_raw, 2)
+                    hv_fb = round(sum(all_hvs) / len(all_hvs), 2)
                 else:
-                    hv_rounded = int(round(hv_avg_raw))
-                result[periode] = {
-                    "mv_avg": mv_rounded,
-                    "mv_min": min(mvs), "mv_max": max(mvs),
-                    "hv_avg": hv_rounded,
-                    "hv_min": min(hvs), "hv_max": max(hvs),
-                    "samples": len(mvs)
+                    hv_fb = int(round(sum(all_hvs) / len(all_hvs)))
+                result[-1] = {
+                    "mv_avg": mv_fb, "hv_avg": hv_fb,
+                    "samples": len(all_mvs), "fallback": True,
+                    "note": "Fallback: rata-rata semua periode (periode target kosong)",
                 }
         else:
-            vals = data["values"]
-            if vals:
-                # Round ke kelipatan 5 (sesuai pola data asli yg 35, 40, 90, dll)
-                avg = sum(vals)/len(vals)
-                rounded = round(avg / 5) * 5
-                result[periode] = {
-                    "avg": rounded,
-                    "raw_avg": round(avg, 1),
-                    "min": min(vals), "max": max(vals),
-                    "samples": len(vals)
+            all_vals = []
+            for pdata in pattern.values():
+                all_vals.extend(pdata["all"])
+            if all_vals:
+                val_fb = round((sum(all_vals) / len(all_vals)) / 5) * 5
+                val_fb = int(max(min(all_vals), min(max(all_vals), val_fb)))
+                result[-1] = {
+                    "avg": val_fb,
+                    "raw_avg": round(sum(all_vals) / len(all_vals), 1),
+                    "min": min(all_vals), "max": max(all_vals),
+                    "samples": len(all_vals), "fallback": True,
+                    "note": "Fallback: rata-rata semua periode (periode target kosong)",
                 }
+
     return result
 
 def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photos):
@@ -400,13 +516,16 @@ def api_pattern():
 @app.route("/api/data/batch-input", methods=["POST"])
 @login_required
 def api_batch_input():
-    """API untuk batch input — bisa per-item (multiple periods) atau per-periode (multiple items)."""
+    """API untuk batch input — bisa per-item (multiple periods) atau per-periode (multiple items).
+    Support dry_run=true untuk preview tanpa submit (parity dengan CLI --dry-run).
+    """
     token = session["token"]
     data = request.get_json()
     
     data_type = data.get("type")
     mode = data.get("mode", "per-item")  # "per-item" atau "per-periode"
     date_str = data.get("date", datetime.now().strftime("%Y-%m-%d"))
+    dry_run = data.get("dry_run", False)
     
     results = []
     
@@ -436,6 +555,11 @@ def api_batch_input():
                 file_field = "file"
                 num_photos = 1
                 id_field = "penyulangId"
+            
+            if dry_run:
+                val_label = f"MV={it.get('mv')} HV={it.get('hv')}" if data_type == "tegangan-trafo" else f"{it.get('value')}A"
+                results.append({"item_id": item_id, "success": True, "dry_run": True, "value": val_label})
+                continue
             
             dt = datetime.strptime(date_str, "%Y-%m-%d")
             body_data = {
@@ -490,6 +614,11 @@ def api_batch_input():
                 num_photos = 1
                 id_field = "penyulangId"
             
+            if dry_run:
+                val_label = f"MV={p.get('mv')} HV={p.get('hv')}" if data_type == "tegangan-trafo" else f"{p.get('value')}A"
+                results.append({"periode": periodo, "success": True, "dry_run": True, "value": val_label})
+                continue
+            
             dt = datetime.strptime(date_str, "%Y-%m-%d")
             body_data = {
                 id_field: item_id,
@@ -516,7 +645,7 @@ def api_batch_input():
             else:
                 results.append({"periode": periodo, "success": False, "message": result.get("message")})
     
-    return jsonify({"success": True, "results": results})
+    return jsonify({"success": True, "results": results, "dry_run": dry_run})
 
 @app.route("/api/data/smart-suggest", methods=["GET"])
 @login_required
@@ -710,23 +839,70 @@ def api_batch_pattern():
             mvs = data["mv_values"]
             if mvs:
                 nama = item_names.get(item_id, "")
-                mv_avg_raw = sum(mvs) / len(mvs)
-                hv_avg_raw = sum(data["hv_values"]) / len(data["hv_values"])
-                # Aturan pembulatan MV per trafo
-                mv_rounded = _round_mv(nama, mv_avg_raw)
-                # HV: PS pakai 2 desimal (sisi 20kV), lainnya integer
-                if "PS" in nama.upper():
-                    hv_rounded = round(hv_avg_raw, 2)
+                hvs = data["hv_values"]
+                # 50% pattern + 50% base (parity dengan CLI smart_suggest_tegangan_from_cache)
+                if is_target_weekend:
+                    pat_mv = data["mv_weekend"] if data["mv_weekend"] else mvs
+                    pat_hv = data["hv_weekend"] if data["hv_weekend"] else hvs
                 else:
-                    hv_rounded = int(round(hv_avg_raw))
+                    pat_mv = data["mv_weekday"] if data["mv_weekday"] else mvs
+                    pat_hv = data["hv_weekday"] if data["hv_weekday"] else hvs
+
+                base_mv = sum(mvs) / len(mvs)
+                pattern_mv = sum(pat_mv) / len(pat_mv)
+                smart_mv = 0.5 * pattern_mv + 0.5 * base_mv
+                mv_rounded = _round_mv(nama, smart_mv)
+                if pat_mv:
+                    mv_rounded = max(min(pat_mv), min(max(pat_mv), mv_rounded))
+                    mv_rounded = _round_mv(nama, mv_rounded)
+
+                base_hv = sum(hvs) / len(hvs)
+                pattern_hv = sum(pat_hv) / len(pat_hv)
+                smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
+                if "PS" in nama.upper():
+                    hv_rounded = round(smart_hv, 2)
+                    if pat_hv:
+                        hv_rounded = max(min(pat_hv), min(max(pat_hv), hv_rounded))
+                        hv_rounded = round(hv_rounded, 2)
+                else:
+                    hv_rounded = round(smart_hv)
+                    if pat_hv:
+                        hv_rounded = max(min(pat_hv), min(max(pat_hv), hv_rounded))
+                    hv_rounded = int(hv_rounded)
+
                 patterns[str(item_id)] = {
                     "mv_avg": mv_rounded,
                     "hv_avg": hv_rounded,
-                    "samples": len(mvs)
+                    "samples": len(mvs),
+                    "pattern_type": "weekend" if is_target_weekend else "weekday",
                 }
         else:
             all_vals = data["all_values"]
             if not all_vals:
+                # Fallback: kalau periode target kosong, pakai rata-rata semua periode
+                # Kumpulkan semua nilai dari semua periode untuk item ini
+                fb_vals = []
+                for offset, d, d_is_weekend, result in results_list:
+                    items = result.get("data", {}).get("items", [])
+                    for it in items:
+                        if it["id"] != item_id or it.get("statusCB") == "OFF":
+                            continue
+                        for e in it.get("beban", []):
+                            fb_vals.append(e["beban"])
+                if not fb_vals:
+                    continue
+                fb_avg = sum(fb_vals) / len(fb_vals)
+                fb_suggested = round(fb_avg / 5) * 5
+                fb_suggested = max(min(fb_vals), min(max(fb_vals), fb_suggested))
+                patterns[str(item_id)] = {
+                    "avg": int(fb_suggested),
+                    "raw_avg": round(fb_avg, 1),
+                    "min": min(fb_vals), "max": max(fb_vals),
+                    "samples": len(fb_vals),
+                    "pattern_type": "fallback",
+                    "fallback": True,
+                    "note": "Fallback: rata-rata semua periode (periode target kosong)",
+                }
                 continue
             
             # Pakai weekday atau weekend pattern sesuai target hari
@@ -752,7 +928,7 @@ def api_batch_pattern():
                 suggested = max(p_min, min(p_max, suggested))
             
             patterns[str(item_id)] = {
-                "avg": suggested,
+                "avg": int(suggested),
                 "raw_avg": round(smart_avg, 1),
                 "base_avg": round(base_avg, 1),
                 "pattern_avg": round(pattern_avg, 1),
@@ -777,87 +953,211 @@ PS_RULES = {
 @login_required
 def api_batch_pattern_tegangan():
     """
-    API khusus tegangan: pola + aturan PS1/PS2.
-    HV PS1 = MV TRAFO 1, HV PS2 = MV TRAFO 3, MV PS genap bulat.
+    API khusus tegangan: pola 14 hari + weekday/weekend + aturan PS1/PS2 dynamic.
+    PARITY dengan CLI smart_suggest_tegangan_from_cache + fallback_tegangan_from_cache.
+
+    Logika:
+    - 14 hari historis, weekday/weekend aware (50% pattern + 50% base)
+    - MV: pembulatan per trafo (PS=0des, T1=1des, lain=2des), clamp range
+    - HV PS1 = MV TRAFO 1 (dinamis lookup di cache), HV PS2 = MV TRAFO 3
+    - HV trafo biasa = integer ~150kV
+    - Fallback: kalau periode target kosong, pakai rata-rata semua periode
     """
     token = session["token"]
     periode = request.args.get("periode", type=int)
-    days = request.args.get("days", 7, type=int)
+    days = request.args.get("days", 14, type=int)
     date_str = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
-    
+
     from collections import defaultdict
     from datetime import timedelta
-    
+    from concurrent.futures import ThreadPoolExecutor
+
     path = "/gama/opgi-20kv/operator-gi/tegangan-trafo"
     today = datetime.strptime(date_str, "%Y-%m-%d")
-    item_patterns = defaultdict(lambda: {"mv_values": [], "hv_values": []})
-    item_names = {}  # id → nama trafo (untuk aturan pembulatan MV)
-    
-    from concurrent.futures import ThreadPoolExecutor
-    
-    def fetch_day_teg(offset):
-        d = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
-        return api_get(token, path, {"garduIndukId": 222, "date": d})
-    
+    is_target_weekend = today.weekday() >= 5
+
+    # Build cache: item_id → {name, periode_data: {periode: {all, weekday, weekend}}}
+    cache = {}
+    item_names = {}
+
+    def fetch_day(offset):
+        d = today - timedelta(days=offset)
+        return d.weekday() >= 5, api_get(token, path, {"garduIndukId": 222, "date": d.strftime("%Y-%m-%d")})
+
     with ThreadPoolExecutor(max_workers=8) as executor:
-        results_list = list(executor.map(fetch_day_teg, range(1, days + 1)))
-    
-    for result in results_list:
+        results_list = list(executor.map(fetch_day, range(1, days + 1)))
+
+    for is_weekend, result in results_list:
         items = result.get("data", {}).get("items", [])
         for it in items:
-            item_names[it["id"]] = it.get("nama", "")
+            item_id = it["id"]
+            item_names[item_id] = it.get("nama", "")
+            if item_id not in cache:
+                cache[item_id] = {
+                    "name": it.get("nama", ""),
+                    "periode_data": defaultdict(lambda: {"all": [], "weekday": [], "weekend": []}),
+                }
             for e in it.get("tegangan", []):
-                if e["periode"] == periode:
-                    item_patterns[it["id"]]["mv_values"].append(e["mv"])
-                    item_patterns[it["id"]]["hv_values"].append(e["hv"])
-    
-    patterns = {}
-    for item_id, data in item_patterns.items():
-        if data["mv_values"]:
-            nama = item_names.get(item_id, "")
-            mv_avg = sum(data["mv_values"]) / len(data["mv_values"])
-            hv_avg = sum(data["hv_values"]) / len(data["hv_values"])
-            
-            if item_id in PS_RULES:
-                # PS trafo: MV pembulatan ke integer (parity dengan CLI), HV dari MV trafo sumber
-                mv_rounded = _round_mv(nama, mv_avg)  # PS → 0 desimal (int)
-                source_id = PS_RULES[item_id]["hv_source"]
-                source_data = item_patterns.get(source_id, {"mv_values": []})
-                if source_data["mv_values"]:
-                    # HV PS = rata-rata MV trafo sumber, dibulatkan sesuai aturan trafo sumber
-                    source_name = item_names.get(source_id, "")
-                    hv_from_source = _round_mv(source_name, sum(source_data["mv_values"]) / len(source_data["mv_values"]))
+                p = e["periode"]
+                cache[item_id]["periode_data"][p]["all"].append(e)
+                if is_weekend:
+                    cache[item_id]["periode_data"][p]["weekend"].append(e)
                 else:
-                    hv_from_source = round(hv_avg, 2)
-                
-                patterns[str(item_id)] = {
-                    "mv_avg": mv_rounded,
-                    "hv_avg": hv_from_source,
-                    "samples": len(data["mv_values"]),
-                    "is_ps": True,
-                    "hv_source_name": "TRAFO 1" if source_id == 22241 else "TRAFO 3",
-                    "note": f"HV=MV {patterns.get(str(source_id), {}).get('note', 'TRAFO sumber')}, MV bulat"
-                }
+                    cache[item_id]["periode_data"][p]["weekday"].append(e)
+
+    patterns = {}
+
+    def compute_tegangan(item_id, per, target_weekend):
+        """Return (mv, hv, info, is_ps, fallback_used) atau (None, None, None, False, False)."""
+        if item_id not in cache:
+            return None, None, None, False, False
+
+        pdata = cache[item_id]["periode_data"].get(per)
+        nama = cache[item_id].get("name", "").upper()
+        is_ps = "PS" in nama
+
+        # Fallback: periode target kosong → pakai rata-rata semua periode
+        if not pdata or not pdata["all"]:
+            entries = []
+            for pd in cache[item_id]["periode_data"].values():
+                entries.extend(pd["all"])
+            entries = [e for e in entries if e.get("mv") is not None and e.get("hv") is not None]
+            if not entries:
+                return None, None, None, is_ps, False
+            mv_vals = [e["mv"] for e in entries]
+            hv_vals = [e["hv"] for e in entries]
+            mv = _round_mv(cache[item_id].get("name", ""), sum(mv_vals) / len(mv_vals))
+            mv = max(min(mv_vals), min(max(mv_vals), mv))
+            mv = _round_mv(cache[item_id].get("name", ""), mv)
+            if is_ps:
+                hv = round(sum(hv_vals) / len(hv_vals), 2)
             else:
-                # TRAFO 1/2/3: aturan pembulatan per nama
-                mv_rounded = _round_mv(nama, mv_avg)
-                patterns[str(item_id)] = {
-                    "mv_avg": mv_rounded,
-                    "hv_avg": int(round(hv_avg)),
-                    "samples": len(data["mv_values"]),
-                    "is_ps": False
-                }
-    
-    # Update note PS setelah semua trafo diproses
-    for item_id_str, pdata in patterns.items():
-        item_id = int(item_id_str)
-        if item_id in PS_RULES:
-            source_id = PS_RULES[item_id]["hv_source"]
-            source_name = "TRAFO 1" if source_id == 22241 else "TRAFO 3"
-            source_mv = patterns.get(str(source_id), {}).get("mv_avg", "?")
-            pdata["note"] = f"HV={source_mv}kV (dari MV {source_name}), MV genap bulat"
-    
-    return jsonify({"success": True, "patterns": patterns, "is_target_weekend": today.weekday() >= 5})
+                hv = int(round(sum(hv_vals) / len(hv_vals)))
+            return mv, hv, f"FALLBACK avg semua periode ({len(mv_vals)}d)", is_ps, True
+
+        all_entries = pdata["all"]
+        if target_weekend:
+            pat_entries = pdata["weekend"] if pdata["weekend"] else all_entries
+            pattern_type = "weekend"
+        else:
+            pat_entries = pdata["weekday"] if pdata["weekday"] else all_entries
+            pattern_type = "weekday"
+
+        all_mv = [e["mv"] for e in all_entries]
+        all_hv = [e["hv"] for e in all_entries]
+        pat_mv = [e["mv"] for e in pat_entries]
+        pat_hv = [e["hv"] for e in pat_entries]
+
+        # MV: 50% pattern + 50% base
+        base_mv = sum(all_mv) / len(all_mv)
+        pattern_mv = sum(pat_mv) / len(pat_mv)
+        smart_mv = 0.5 * pattern_mv + 0.5 * base_mv
+        smart_mv = _round_mv(cache[item_id].get("name", ""), smart_mv)
+        if pat_mv:
+            smart_mv = max(min(pat_mv), min(max(pat_mv), smart_mv))
+            smart_mv = _round_mv(cache[item_id].get("name", ""), smart_mv)
+
+        # HV
+        if is_ps:
+            # PS1 → TRAFO 1, PS2 → TRAFO 3
+            if "1" in nama:
+                source_target = "TRAFO 1"
+            elif "2" in nama:
+                source_target = "TRAFO 3"
+            else:
+                source_target = None
+
+            source_mv = None
+            if source_target:
+                for sid, sdata in cache.items():
+                    if sdata.get("name", "").upper() == source_target:
+                        src_p = sdata["periode_data"].get(per)
+                        if src_p and src_p["all"]:
+                            if target_weekend:
+                                src_pat = src_p["weekend"] if src_p["weekend"] else src_p["all"]
+                            else:
+                                src_pat = src_p["weekday"] if src_p["weekday"] else src_p["all"]
+                            src_mv_vals = [e["mv"] for e in src_pat]
+                            src_all_mv = [e["mv"] for e in src_p["all"]]
+                            if src_mv_vals:
+                                base_src = sum(src_all_mv) / len(src_all_mv)
+                                pat_src = sum(src_mv_vals) / len(src_mv_vals)
+                                source_mv = 0.5 * pat_src + 0.5 * base_src
+                                src_decimals = 1 if source_target == "TRAFO 1" else 2
+                                source_mv = round(source_mv, src_decimals)
+                                source_mv = max(min(src_mv_vals), min(max(src_mv_vals), source_mv))
+                                source_mv = round(source_mv, src_decimals)
+                        break
+
+            if source_mv is not None:
+                smart_hv = source_mv
+                info = f"{pattern_type} HV=MV {source_target}={source_mv} ({len(pat_mv)}d)"
+            else:
+                # Fallback HV PS
+                base_hv = sum(all_hv) / len(all_hv)
+                pattern_hv = sum(pat_hv) / len(pat_hv)
+                smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
+                smart_hv = round(smart_hv, 2)
+                if pat_hv:
+                    smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
+                    smart_hv = round(smart_hv, 2)
+                info = f"{pattern_type} HV={pattern_hv:.2f} (fallback {len(pat_mv)}d)"
+        else:
+            # Trafo biasa: HV ~150kV integer
+            base_hv = sum(all_hv) / len(all_hv)
+            pattern_hv = sum(pat_hv) / len(pat_hv)
+            smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
+            smart_hv = round(smart_hv)
+            if pat_hv:
+                smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
+            smart_hv = int(smart_hv)
+            info = f"{pattern_type} MV={pattern_mv:.2f} HV={pattern_hv:.0f} ({len(pat_mv)}d)"
+
+        return smart_mv, smart_hv, info, is_ps, False
+
+    for item_id in cache:
+        mv, hv, info, is_ps, fallback_used = compute_tegangan(item_id, periode, is_target_weekend)
+        if mv is None:
+            continue
+
+        nama = cache[item_id].get("name", "")
+        note = ""
+        if is_ps:
+            if "1" in nama.upper():
+                src_name = "TRAFO 1"
+            elif "2" in nama.upper():
+                src_name = "TRAFO 3"
+            else:
+                src_name = "?"
+            # Cari MV trafo sumber untuk ditampilkan di note
+            src_mv_display = "?"
+            for sid, sdata in cache.items():
+                if sdata.get("name", "").upper() == src_name:
+                    src_p = sdata["periode_data"].get(periode)
+                    if src_p and src_p["all"]:
+                        src_all_mv = [e["mv"] for e in src_p["all"]]
+                        src_mv_display = _round_mv(sdata.get("name", ""), sum(src_all_mv) / len(src_all_mv))
+                    break
+            note = f"HV={src_mv_display}kV (dari MV {src_name}), MV bulat"
+
+        patterns[str(item_id)] = {
+            "mv_avg": mv,
+            "hv_avg": hv,
+            "samples": len(cache[item_id]["periode_data"].get(periode, {}).get("all", [])),
+            "is_ps": is_ps,
+            "note": note,
+            "info": info,
+            "fallback": fallback_used,
+            "pattern_type": "weekend" if is_target_weekend else "weekday",
+            "name": nama,
+        }
+
+    return jsonify({
+        "success": True,
+        "patterns": patterns,
+        "is_target_weekend": is_target_weekend,
+        "days": days,
+    })
 
 @app.route("/api/data/sync-portal", methods=["POST"])
 @login_required
@@ -894,6 +1194,414 @@ def api_sync_portal():
         return jsonify({"success": False, "message": "Module superi_sync tidak tersedia"})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
+
+# ============================================================
+# CONFIG SETUP (parity dengan CLI setup_config)
+# ============================================================
+
+CONFIG_FILE = os.path.join(SCRIPT_DIR, ".superi_config.json")
+
+def _load_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE) as f:
+            return json.load(f)
+    return {}
+
+def _save_config(cfg):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+
+@app.route("/setup", methods=["GET", "POST"])
+@login_required
+def setup_page():
+    """Halaman setup kredensial (parity dengan CLI setup_config)."""
+    if request.method == "POST":
+        cfg = _load_config()
+        # Pertahankan keys lama
+        nip = request.form.get("nip", "").strip()
+        password = request.form.get("password", "").strip()
+        portal_user = request.form.get("portal_user", "").strip()
+        portal_password = request.form.get("portal_password", "").strip()
+        portal_url = request.form.get("portal_url", "").strip()
+        portal_gi_id = request.form.get("portal_gi_id", "").strip()
+        gi_id = request.form.get("gi_id", "").strip()
+
+        if nip:
+            cfg["nip"] = nip
+        if password:
+            cfg["password"] = password
+        if portal_user:
+            cfg["portal_user"] = portal_user
+        if portal_password:
+            cfg["portal_password"] = portal_password
+        if portal_url:
+            cfg["portal_url"] = portal_url
+        if portal_gi_id:
+            cfg["portal_gi_id"] = portal_gi_id
+        if gi_id:
+            cfg["gi_id"] = gi_id
+        cfg.setdefault("portal_url", "http://10.3.187.6/apdjakarta")
+        cfg.setdefault("portal_gi_id", "143")
+        cfg.setdefault("gi_id", "222")
+        _save_config(cfg)
+        return render_template("setup.html", saved=True, config=cfg, user=session.get("user", {}))
+    cfg = _load_config()
+    return render_template("setup.html", saved=False, config=cfg, user=session.get("user", {}))
+
+# ============================================================
+# AUTO MODE (parity dengan superior_auto.py)
+# ============================================================
+
+@app.route("/auto")
+@login_required
+def auto_page():
+    """Halaman Auto Mode: status, enable/disable, config window/jam, dry-run, trigger manual."""
+    cfg = _load_config()
+    return render_template("auto.html", config=cfg)
+
+@app.route("/api/auto/status", methods=["GET"])
+@login_required
+def api_auto_status():
+    """Status auto mode (parity dengan CLI cmd_status)."""
+    cfg = _load_config()
+    return jsonify({
+        "enabled": cfg.get("auto_enabled", False),
+        "window_start": cfg.get("auto_window_start", 22),
+        "window_end": cfg.get("auto_window_end", 5),
+        "types": cfg.get("auto_types", ["penyulang", "trafo", "tegangan"]),
+        "sync_portal": cfg.get("auto_sync_portal", True),
+        "retry_attempts": cfg.get("auto_retry_attempts", 5),
+        "retry_delay": cfg.get("auto_retry_delay", 10),
+        "has_superi_creds": bool(cfg.get("nip") and cfg.get("password")),
+        "has_portal_creds": bool(cfg.get("portal_user") and cfg.get("portal_password")),
+    })
+
+@app.route("/api/auto/toggle", methods=["POST"])
+@login_required
+def api_auto_toggle():
+    """Enable/disable auto mode (parity dengan cmd_enable/cmd_disable)."""
+    cfg = _load_config()
+    action = request.get_json().get("action")  # "enable" or "disable"
+    if action == "enable":
+        cfg["auto_enabled"] = True
+        cfg.setdefault("auto_window_start", 22)
+        cfg.setdefault("auto_window_end", 5)
+        cfg.setdefault("auto_types", ["penyulang", "trafo", "tegangan"])
+        cfg.setdefault("auto_sync_portal", True)
+        cfg.setdefault("auto_retry_attempts", 5)
+        cfg.setdefault("auto_retry_delay", 10)
+        _save_config(cfg)
+        return jsonify({"success": True, "enabled": True, "message": "Auto mode AKTIF"})
+    elif action == "disable":
+        cfg["auto_enabled"] = False
+        _save_config(cfg)
+        return jsonify({"success": True, "enabled": False, "message": "Auto mode NONAKTIF"})
+    return jsonify({"success": False, "message": "Invalid action"}), 400
+
+@app.route("/api/auto/config", methods=["POST"])
+@login_required
+def api_auto_config():
+    """Update auto mode config (window, types, retry, sync)."""
+    cfg = _load_config()
+    data = request.get_json()
+    if "window_start" in data:
+        cfg["auto_window_start"] = max(0, min(23, int(data["window_start"])))
+    if "window_end" in data:
+        cfg["auto_window_end"] = max(0, min(23, int(data["window_end"])))
+    if "types" in data and isinstance(data["types"], list):
+        valid = [t for t in data["types"] if t in ("penyulang", "trafo", "tegangan")]
+        if valid:
+            cfg["auto_types"] = valid
+    if "sync_portal" in data:
+        cfg["auto_sync_portal"] = bool(data["sync_portal"])
+    if "retry_attempts" in data:
+        cfg["auto_retry_attempts"] = max(1, int(data["retry_attempts"]))
+    if "retry_delay" in data:
+        cfg["auto_retry_delay"] = max(1, int(data["retry_delay"]))
+    _save_config(cfg)
+    return jsonify({"success": True, "config": {
+        "enabled": cfg.get("auto_enabled", False),
+        "window_start": cfg.get("auto_window_start", 22),
+        "window_end": cfg.get("auto_window_end", 5),
+        "types": cfg.get("auto_types", []),
+        "sync_portal": cfg.get("auto_sync_portal", True),
+        "retry_attempts": cfg.get("auto_retry_attempts", 5),
+        "retry_delay": cfg.get("auto_retry_delay", 10),
+    }})
+
+@app.route("/api/auto/run", methods=["POST"])
+@login_required
+def api_auto_run():
+    """Trigger auto mode secara manual dari web (parity dengan superior_auto.py run_auto).
+
+    Bisa dry-run (preview tanpa input) atau live.
+    """
+    data = request.get_json() or {}
+    dry_run = data.get("dry_run", False)
+    force_jam = data.get("jam")  # int atau None
+    types = data.get("types")  # list atau None
+
+    import superi_auto
+    try:
+        ok = superi_auto.run_auto(force_jam=force_jam, types=types, dry_run=dry_run)
+        return jsonify({"success": ok, "dry_run": dry_run, "message": "Auto mode selesai" + (" (DRY-RUN)" if dry_run else "")})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route("/api/auto/log", methods=["GET"])
+@login_required
+def api_auto_log():
+    """Baca auto_log.txt (n tail lines)."""
+    log_file = os.path.join(SCRIPT_DIR, "auto_log.txt")
+    n = request.args.get("n", 50, type=int)
+    if not os.path.exists(log_file):
+        return jsonify({"success": True, "log": "", "message": "Belum ada log"})
+    try:
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        tail = lines[-n:] if len(lines) > n else lines
+        return jsonify({"success": True, "log": "".join(tail), "total_lines": len(lines)})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+# ============================================================
+# DRY-RUN / SCRIPTING API (parity dengan superi_input.py)
+# ============================================================
+
+@app.route("/api/data/dry-run", methods=["POST"])
+@login_required
+def api_dry_run():
+    """Preview smart-suggest tanpa submit (parity dengan CLI --dry-run).
+
+    Input: {type, item_id, periode, date}
+    Output: {success, suggested, breakdown, info}
+    """
+    data = request.get_json()
+    data_type = data.get("type")
+    item_id = data.get("item_id")
+    periode = data.get("periode")
+    date_str = data.get("date", datetime.now().strftime("%Y-%m-%d"))
+
+    if not data_type or not item_id or periode is None:
+        return jsonify({"success": False, "message": "Missing type/item_id/periode"}), 400
+
+    token = session["token"]
+    from datetime import datetime as dt
+    from concurrent.futures import ThreadPoolExecutor
+    from collections import defaultdict
+    from datetime import timedelta
+
+    today = dt.strptime(date_str, "%Y-%m-%d")
+    is_target_weekend = today.weekday() >= 5
+
+    paths = {
+        "beban-penyulang": "/gama/opgi-20kv/operator-gi/beban-penyulang",
+        "beban-trafo": "/gama/opgi-20kv/operator-gi/beban-trafo",
+        "tegangan-trafo": "/gama/opgi-20kv/operator-gi/tegangan-trafo",
+    }
+    path = paths[data_type]
+
+    # Build cache untuk item ini (semua periode, 14 hari)
+    cache = defaultdict(lambda: {"all": [], "weekday": [], "weekend": []})
+    item_name = ""
+
+    def fetch_day(offset):
+        d = today - timedelta(days=offset)
+        return d.weekday() >= 5, api_get(token, path, {"garduIndukId": 222, "date": d.strftime("%Y-%m-%d")})
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(fetch_day, range(1, 15)))
+
+    for is_weekend, result in results:
+        items = result.get("data", {}).get("items", [])
+        for it in items:
+            if it["id"] != item_id:
+                continue
+            if not item_name:
+                item_name = it.get("nama", "")
+            if data_type == "tegangan-trafo":
+                for e in it.get("tegangan", []):
+                    p = e["periode"]
+                    cache[p]["all"].append(e)
+                    if is_weekend:
+                        cache[p]["weekend"].append(e)
+                    else:
+                        cache[p]["weekday"].append(e)
+            else:
+                if it.get("statusCB") == "OFF":
+                    continue
+                for e in it.get("beban", []):
+                    p = e["periode"]
+                    val = e["beban"]
+                    cache[p]["all"].append(val)
+                    if is_weekend:
+                        cache[p]["weekend"].append(val)
+                    else:
+                        cache[p]["weekday"].append(val)
+
+    pdata = cache.get(periode, {"all": [], "weekday": [], "weekend": []})
+
+    if not pdata["all"]:
+        # Fallback: rata-rata semua periode
+        all_vals = []
+        for pd in cache.values():
+            all_vals.extend(pd["all"])
+        if not all_vals:
+            return jsonify({"success": False, "message": "Tidak ada histori untuk item ini"})
+        if data_type == "tegangan-trafo":
+            mvs = [e["mv"] for e in all_vals]
+            hvs = [e["hv"] for e in all_vals]
+            mv = _round_mv(item_name, sum(mvs) / len(mvs))
+            mv = max(min(mvs), min(max(mvs), mv))
+            mv = _round_mv(item_name, mv)
+            if "PS" in item_name.upper():
+                hv = round(sum(hvs) / len(hvs), 2)
+            else:
+                hv = int(round(sum(hvs) / len(hvs)))
+            return jsonify({
+                "success": True, "dry_run": True,
+                "suggested": {"mv": mv, "hv": hv},
+                "info": f"FALLBACK avg semua periode ({len(mvs)}d)",
+                "samples": len(mvs), "fallback": True,
+            })
+        else:
+            avg = sum(all_vals) / len(all_vals)
+            suggested = round(avg / 5) * 5
+            suggested = max(min(all_vals), min(max(all_vals), suggested))
+            return jsonify({
+                "success": True, "dry_run": True,
+                "suggested": int(suggested),
+                "info": f"FALLBACK avg semua periode ({len(all_vals)}d)",
+                "samples": len(all_vals), "fallback": True,
+                "breakdown": {"base_avg": round(avg, 1)},
+            })
+
+    if data_type == "tegangan-trafo":
+        all_entries = pdata["all"]
+        if is_target_weekend:
+            pat_entries = pdata["weekend"] if pdata["weekend"] else all_entries
+        else:
+            pat_entries = pdata["weekday"] if pdata["weekday"] else all_entries
+
+        all_mv = [e["mv"] for e in all_entries]
+        all_hv = [e["hv"] for e in all_entries]
+        pat_mv = [e["mv"] for e in pat_entries]
+        pat_hv = [e["hv"] for e in pat_entries]
+
+        base_mv = sum(all_mv) / len(all_mv)
+        pattern_mv = sum(pat_mv) / len(pat_mv)
+        smart_mv = 0.5 * pattern_mv + 0.5 * base_mv
+        smart_mv = _round_mv(item_name, smart_mv)
+        if pat_mv:
+            smart_mv = max(min(pat_mv), min(max(pat_mv), smart_mv))
+            smart_mv = _round_mv(item_name, smart_mv)
+
+        nama_upper = item_name.upper()
+        is_ps = "PS" in nama_upper
+        if is_ps:
+            source_target = "TRAFO 1" if "1" in nama_upper else ("TRAFO 3" if "2" in nama_upper else None)
+            # Untuk dry-run tidak perlu lookup source (cukup tampilkan saran)
+            base_hv = sum(all_hv) / len(all_hv)
+            pattern_hv = sum(pat_hv) / len(pat_hv)
+            smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
+            smart_hv = round(smart_hv, 2)
+            if pat_hv:
+                smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
+                smart_hv = round(smart_hv, 2)
+        else:
+            base_hv = sum(all_hv) / len(all_hv)
+            pattern_hv = sum(pat_hv) / len(pat_hv)
+            smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
+            smart_hv = round(smart_hv)
+            if pat_hv:
+                smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
+            smart_hv = int(smart_hv)
+
+        return jsonify({
+            "success": True, "dry_run": True,
+            "suggested": {"mv": smart_mv, "hv": smart_hv},
+            "info": f"{'weekend' if is_target_weekend else 'weekday'} MV={pattern_mv:.2f} HV={pattern_hv:.2f} ({len(pat_mv)}d)",
+            "samples": len(all_mv),
+            "breakdown": {
+                "base_mv": round(base_mv, 2), "pattern_mv": round(pattern_mv, 2),
+                "base_hv": round(base_hv, 2), "pattern_hv": round(pattern_hv, 2),
+                "is_weekend": is_target_weekend, "is_ps": is_ps,
+            },
+        })
+    else:
+        all_vals = pdata["all"]
+        if is_target_weekend:
+            pat_vals = pdata["weekend"] if pdata["weekend"] else all_vals
+        else:
+            pat_vals = pdata["weekday"] if pdata["weekday"] else all_vals
+
+        base_avg = sum(all_vals) / len(all_vals)
+        pattern_avg = sum(pat_vals) / len(pat_vals)
+        smart_avg = 0.5 * pattern_avg + 0.5 * base_avg
+        suggested = round(smart_avg / 5) * 5
+        if pat_vals:
+            suggested = max(min(pat_vals), min(max(pat_vals), suggested))
+
+        return jsonify({
+            "success": True, "dry_run": True,
+            "suggested": int(suggested),
+            "info": f"{'weekend' if is_target_weekend else 'weekday'} avg {pattern_avg:.0f}A",
+            "samples": len(all_vals),
+            "breakdown": {
+                "base_avg": round(base_avg, 1),
+                "pattern_avg": round(pattern_avg, 1),
+                "is_weekend": is_target_weekend,
+                "pattern_samples": len(pat_vals),
+            },
+        })
+
+@app.route("/api/scripting/input", methods=["POST"])
+@login_required
+def api_scripting_input():
+    """One-shot input API (parity dengan superi_input.py CLI scripting).
+
+    Input: {type, item_id, periode, value/hv/mv, date}
+    """
+    data = request.get_json()
+    data_type = data.get("type")
+    item_id = data.get("item_id")
+    periode = data.get("periode")
+    date_str = data.get("date", datetime.now().strftime("%Y-%m-%d"))
+
+    if not data_type or not item_id or periode is None:
+        return jsonify({"success": False, "message": "Missing type/item_id/periode"}), 400
+
+    token = session["token"]
+    endpoint_map = {
+        "beban-penyulang": ("/gama/opgi-20kv/operator-gi/beban-penyulang/input", "file", 1, "penyulangId", "beban"),
+        "beban-trafo": ("/gama/opgi-20kv/operator-gi/beban-trafo/input", "file", 1, "trafoId", "beban"),
+        "tegangan-trafo": ("/gama/opgi-20kv/operator-gi/tegangan-trafo/input", "files", 2, "trafoId", "mv"),
+    }
+    ep = endpoint_map[data_type]
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+
+    body_data = {
+        ep[3]: item_id,
+        "timezone": "Asia/Jakarta",
+        "periode": periode,
+        "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year,
+        "durasi": 0.1,
+        ep[4]: data.get("value") if data_type != "tegangan-trafo" else data.get("mv"),
+    }
+    if data_type == "tegangan-trafo":
+        body_data["hv"] = data.get("hv")
+        body_data["fotoHV"] = {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        body_data["fotoMV"] = {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+    else:
+        body_data["foto"] = {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+
+    status, result = api_post_multipart(token, ep[0], body_data, DUMMY_JPEG, ep[1], ep[2])
+    if result.get("success"):
+        return jsonify({"success": True, "id": result["data"].get("id"), "message": "Data berhasil disimpan"})
+    msg = result.get("message", "Error")
+    if isinstance(msg, list):
+        msg = ", ".join(msg)
+    return jsonify({"success": False, "message": msg}), 400
 
 if __name__ == "__main__":
     import subprocess

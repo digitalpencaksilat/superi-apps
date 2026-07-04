@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SUPER-I APP - Auto Mode</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0d1b2a;
+            color: #e0e6ed;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(90deg, #1a2a4a 0%, #0d1b2a 100%);
+            padding: 16px 24px;
+            border-bottom: 2px solid #1e3a5f;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .header h1 { font-size: 18px; color: #4dabf7; }
+        .nav { display: flex; gap: 8px; }
+        .nav a {
+            padding: 6px 14px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 600;
+            border: 1px solid #2a3f5f;
+            color: #8b9bb4;
+            transition: all 0.2s;
+        }
+        .nav a:hover { color: #4dabf7; border-color: #4dabf7; }
+        .nav a.active { background: #4dabf7; color: #0d1b2a; border-color: #4dabf7; }
+        .btn-logout {
+            background: rgba(255,77,77,0.15);
+            color: #ff8787;
+            border: 1px solid rgba(255,77,77,0.3);
+            padding: 8px 16px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-size: 12px;
+        }
+        .container { padding: 24px; max-width: 900px; margin: 0 auto; }
+        .status-banner {
+            background: #142540;
+            border: 1px solid #1e3a5f;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .status-info { flex: 1; min-width: 200px; }
+        .status-label { font-size: 11px; color: #8b9bb4; text-transform: uppercase; letter-spacing: 1px; }
+        .status-value { font-size: 22px; font-weight: 700; margin-top: 4px; }
+        .status-value.on { color: #69db7c; }
+        .status-value.off { color: #ff8787; }
+        .status-detail { font-size: 12px; color: #8b9bb4; margin-top: 6px; }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .btn-enable { background: #2b8a3e; color: #fff; }
+        .btn-enable:hover { background: #51cf66; }
+        .btn-disable { background: #c92a2a; color: #fff; }
+        .btn-disable:hover { background: #ff6b6b; }
+        .btn-secondary {
+            background: transparent;
+            color: #8b9bb4;
+            border: 1px solid #2a3f5f;
+        }
+        .btn-secondary:hover { background: #1a2a4a; }
+        .btn-primary { background: #4dabf7; color: #0d1b2a; }
+        .btn-primary:hover { background: #74c0fc; }
+        .btn-warning { background: #ffd43b; color: #0d1b2a; }
+        .btn-warning:hover { background: #ffe066; }
+        .card {
+            background: #142540;
+            border: 1px solid #1e3a5f;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .card h2 { font-size: 15px; color: #4dabf7; margin-bottom: 14px; }
+        .form-group { margin-bottom: 14px; }
+        .form-group label {
+            display: block;
+            font-size: 12px;
+            color: #b0bcc9;
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+        .form-group input, .form-group select {
+            padding: 8px 12px;
+            background: #0d1b2a;
+            border: 1px solid #2a3f5f;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 13px;
+            width: 100%;
+        }
+        .form-row { display: flex; gap: 12px; }
+        .form-row .form-group { flex: 1; }
+        .checkbox-group { display: flex; gap: 16px; flex-wrap: wrap; }
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: #b0bcc9;
+        }
+        .checkbox-item input { width: auto; }
+        .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .log-box {
+            background: #0d1b2a;
+            border: 1px solid #1e3a5f;
+            border-radius: 6px;
+            padding: 12px;
+            font-family: 'Menlo', 'Monaco', monospace;
+            font-size: 11px;
+            color: #8b9bb4;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            line-height: 1.5;
+        }
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 13px;
+            z-index: 2000;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.3s;
+        }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.success { background: #2b8a3e; color: #fff; }
+        .toast.error { background: #c92a2a; color: #fff; }
+        .badge {
+            display: inline-block;
+            font-size: 10px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .badge-ok { background: rgba(81,207,102,0.2); color: #69db7c; }
+        .badge-warn { background: rgba(255,212,59,0.2); color: #ffd43b; }
+        .badge-err { background: rgba(255,77,77,0.2); color: #ff8787; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>🤖 SUPER-I APP Auto Mode</h1>
+        </div>
+        <div class="nav">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/auto" class="active">Auto Mode</a>
+            <a href="/setup">Setup</a>
+            <a href="/logout" class="btn-logout">Keluar</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- STATUS BANNER -->
+        <div class="status-banner">
+            <div class="status-info">
+                <div class="status-label">Status Auto Mode</div>
+                <div class="status-value" id="statusValue">Loading...</div>
+                <div class="status-detail" id="statusDetail"></div>
+            </div>
+            <div class="actions">
+                <button class="btn btn-enable" id="btnEnable" onclick="toggleAuto('enable')">Aktifkan</button>
+                <button class="btn btn-disable" id="btnDisable" onclick="toggleAuto('disable')" style="display:none;">Nonaktifkan</button>
+            </div>
+        </div>
+
+        <!-- CONFIG -->
+        <div class="card">
+            <h2>⚙ Konfigurasi Auto Mode</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Window Mulai (jam)</label>
+                    <input type="number" id="cfgWindowStart" min="0" max="23" value="{{ config.auto_window_start or 22 }}">
+                </div>
+                <div class="form-group">
+                    <label>Window Akhir (jam)</label>
+                    <input type="number" id="cfgWindowEnd" min="0" max="23" value="{{ config.auto_window_end or 5 }}">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Tipe Data</label>
+                <div class="checkbox-group">
+                    {% set types = config.auto_types or ['penyulang', 'trafo', 'tegangan'] %}
+                    <label class="checkbox-item"><input type="checkbox" id="typePenyulang" {{ 'checked' if 'penyulang' in types }}> Beban Penyulang</label>
+                    <label class="checkbox-item"><input type="checkbox" id="typeTrafo" {{ 'checked' if 'trafo' in types }}> Beban Trafo</label>
+                    <label class="checkbox-item"><input type="checkbox" id="typeTegangan" {{ 'checked' if 'tegangan' in types }}> Tegangan Trafo</label>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Retry Attempts</label>
+                    <input type="number" id="cfgRetry" min="1" max="20" value="{{ config.auto_retry_attempts or 5 }}">
+                </div>
+                <div class="form-group">
+                    <label>Retry Delay (detik)</label>
+                    <input type="number" id="cfgRetryDelay" min="1" max="120" value="{{ config.auto_retry_delay or 10 }}">
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="checkbox-item"><input type="checkbox" id="cfgSyncPortal" {{ 'checked' if config.auto_sync_portal != false }}> Auto-sync ke Portal PLN setelah input</label>
+            </div>
+            <div class="actions">
+                <button class="btn btn-primary" onclick="saveConfig()">Simpan Config</button>
+            </div>
+        </div>
+
+        <!-- MANUAL TRIGGER -->
+        <div class="card">
+            <h2>▶ Trigger Manual</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Force Jam (opsional, kosongkan = jam sekarang)</label>
+                    <input type="number" id="triggerJam" min="0" max="23" placeholder="mis. 23">
+                </div>
+            </div>
+            <div class="actions">
+                <button class="btn btn-warning" onclick="runAuto(true)">🔍 Dry-Run (Preview)</button>
+                <button class="btn btn-primary" onclick="runAuto(false)">⚡ Jalankan Live</button>
+            </div>
+        </div>
+
+        <!-- LOG -->
+        <div class="card">
+            <h2>📋 Log Terakhir <button class="btn btn-secondary" style="float:right; padding:4px 10px; font-size:11px;" onclick="loadLog()">🔄 Refresh</button></h2>
+            <div class="log-box" id="logBox">Klik Refresh untuk load log...</div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        // Load status on page load
+        async function loadStatus() {
+            try {
+                const resp = await fetch('/api/auto/status');
+                const s = await resp.json();
+                const val = document.getElementById('statusValue');
+                const detail = document.getElementById('statusDetail');
+                if (s.enabled) {
+                    val.textContent = '✓ AKTIF';
+                    val.className = 'status-value on';
+                    document.getElementById('btnEnable').style.display = 'none';
+                    document.getElementById('btnDisable').style.display = 'inline-block';
+                } else {
+                    val.textContent = '⊘ NONAKTIF';
+                    val.className = 'status-value off';
+                    document.getElementById('btnEnable').style.display = 'inline-block';
+                    document.getElementById('btnDisable').style.display = 'none';
+                }
+                let d = `Window: ${String(s.window_start).padStart(2,'0')}:00 - ${String(s.window_end).padStart(2,'0')}:00 | Types: ${s.types.join(', ')}`;
+                d += ` | Retry: ${s.retry_attempts}x/${s.retry_delay}s`;
+                if (s.sync_portal) d += ' | Sync: YES';
+                detail.textContent = d;
+                // Creds badges
+                if (!s.has_superi_creds) {
+                    detail.innerHTML += '<br><span class="badge badge-err">⚠ SUPER-I credentials belum diset! Buka Setup.</span>';
+                }
+                if (!s.has_portal_creds) {
+                    detail.innerHTML += '<br><span class="badge badge-warn">⚠ Portal PLN credentials belum diset (sync skip).</span>';
+                }
+            } catch(e) {
+                console.error(e);
+            }
+        }
+
+        async function toggleAuto(action) {
+            try {
+                const resp = await fetch('/api/auto/toggle', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({action})
+                });
+                const r = await resp.json();
+                showToast(r.message, r.success ? 'success' : 'error');
+                loadStatus();
+            } catch(e) {
+                showToast('Error: ' + e.message, 'error');
+            }
+        }
+
+        async function saveConfig() {
+            const types = [];
+            if (document.getElementById('typePenyulang').checked) types.push('penyulang');
+            if (document.getElementById('typeTrafo').checked) types.push('trafo');
+            if (document.getElementById('typeTegangan').checked) types.push('tegangan');
+
+            const data = {
+                window_start: parseInt(document.getElementById('cfgWindowStart').value),
+                window_end: parseInt(document.getElementById('cfgWindowEnd').value),
+                types: types,
+                sync_portal: document.getElementById('cfgSyncPortal').checked,
+                retry_attempts: parseInt(document.getElementById('cfgRetry').value),
+                retry_delay: parseInt(document.getElementById('cfgRetryDelay').value),
+            };
+            try {
+                const resp = await fetch('/api/auto/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                const r = await resp.json();
+                showToast(r.success ? '✓ Config tersimpan' : '✗ ' + r.message, r.success ? 'success' : 'error');
+                loadStatus();
+            } catch(e) {
+                showToast('Error: ' + e.message, 'error');
+            }
+        }
+
+        async function runAuto(dryRun) {
+            const jamInput = document.getElementById('triggerJam').value;
+            const payload = { dry_run: dryRun };
+            if (jamInput !== '') payload.jam = parseInt(jamInput);
+
+            const label = dryRun ? 'Dry-Run' : 'Live';
+            showToast(`🤖 Auto mode ${label} berjalan...`, 'success');
+
+            try {
+                const resp = await fetch('/api/auto/run', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                const r = await resp.json();
+                if (r.success) {
+                    showToast(`✓ ${label} selesai`, 'success');
+                } else {
+                    showToast(`⚠ ${label}: ${r.message}`, 'error');
+                }
+                loadLog();
+            } catch(e) {
+                showToast('Error: ' + e.message, 'error');
+            }
+        }
+
+        async function loadLog() {
+            try {
+                const resp = await fetch('/api/auto/log?n=50');
+                const r = await resp.json();
+                const box = document.getElementById('logBox');
+                if (r.log && r.log.trim()) {
+                    box.textContent = r.log;
+                    box.scrollTop = box.scrollHeight;
+                } else {
+                    box.textContent = r.message || 'Belum ada log.';
+                }
+            } catch(e) {
+                document.getElementById('logBox').textContent = 'Error loading log: ' + e.message;
+            }
+        }
+
+        function showToast(msg, type) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.className = 'toast show ' + type;
+            setTimeout(() => toast.classList.remove('show'), 4000);
+        }
+
+        loadStatus();
+        loadLog();
+    </script>
+</body>
+</html>

@@ -87,11 +87,48 @@ PORTAL_ENDPOINTS = {
 # ============ UI ============
 R = '\033[0m'; B = '\033[1m'; G = '\033[92m'; Y = '\033[93m'; RE = '\033[91m'; C = '\033[96m'; D = '\033[2m'
 
-def header(t): print(f"\n{B}{C}{'='*60}{R}\n{B}{C}{t.center(60)}{R}\n{B}{C}{'='*60}{R}")
+def header(t):
+    bar = '━' * 60
+    print(f"\n{B}{C}{bar}{R}\n{B}{C}{t.center(60)}{R}\n{B}{C}{bar}{R}")
 def ok(t): print(f"  {G}✓ {t}{R}")
 def err(t): print(f"  {RE}✗ {t}{R}")
 def info(t): print(f"  {C}ℹ {t}{R}")
 def warn(t): print(f"  {Y}⚠ {t}{R}")
+
+# ============ PROGRESS (compact, mirip superi cli) ============
+_BAR_F = '█'
+_BAR_E = '░'
+
+def progress_bar(n, total, width=24):
+    """Bar compact: [████████░░░░░░░░] 16/32 (50%). Tanpa ANSI di dalam → \r overwrite bersih."""
+    if total <= 0:
+        return f"[{_BAR_E * width}] 0/0"
+    n = min(max(n, 0), total)
+    filled = int(round(width * n / total))
+    bar = _BAR_F * filled + _BAR_E * (width - filled)
+    pct = int(round(100 * n / total))
+    return f"[{bar}] {n}/{total} ({pct}%)"
+
+def live_progress(done, total, name=""):
+    """Progress bar 1-baris yang di-overwrite (\\r + erase-to-end \\033[K)."""
+    nm = name[:18].ljust(18) if name else ""
+    tail = f"  {D}{nm}{R}" if nm else ""
+    sys.stdout.write(f"\r  {progress_bar(done, total)}{tail} {G}✓{R}\033[K")
+    sys.stdout.flush()
+
+def summary_box(label, ok_count, fail_count, skip_count, total):
+    """Box 1-baris ringkasan, mirip cli_render.render_summary_box."""
+    inner = f"  Ringkasan {label}: ✓ {ok_count} update"
+    if fail_count:
+        inner += f"  ✗ {fail_count} gagal"
+    if skip_count:
+        inner += f"  ⊘ {skip_count} skip"
+    inner += f"  ({ok_count + fail_count}/{total})"
+    w = len(inner)
+    color = G if fail_count == 0 else Y
+    print(f"  {color}┏{'━' * w}┓{R}")
+    print(f"  {color}┃{inner}┃{R}")
+    print(f"  {color}┗{'━' * w}┛{R}")
 
 # ============ SUPER-I API CLIENT ============
 def superi_login() -> Optional[str]:
@@ -257,17 +294,23 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
     
     # 3. Sync
     mode = f"{Y}DRY-RUN{R}" if dry_run else f"{G}LIVE{R}"
-    info(f"Mode: {mode} | Jam: {jam_start:02d}-{jam_end:02d} | Date: {date_str}")
+    n_hours = jam_end - jam_start + 1
+    cells_per_item = (n_hours * 2) if data_type == "tegangan" else n_hours
+    total_cells = len(superi_data) * cells_per_item
+    info(f"Mode {mode} · Jam {jam_start:02d}-{jam_end:02d} · {len(superi_data)} item · {total_cells} cell")
     print()
-    
+
     updates = 0; errors = 0; skipped = 0
-    
+    error_list = []
+    dry_samples = []
+    done = 0
+
     # Build normalized lookup for grid (handle name variations like "TRAFO PS 1" vs "TRAFO PS1")
     def _normalize(s: str) -> str:
         return ''.join(s.upper().split())  # remove all whitespace + uppercase
-    
+
     grid_normalized = {_normalize(k): (k, v) for k, v in grid.items()}
-    
+
     for name, values in superi_data.items():
         # Try exact match first, then normalized
         rowdata = None
@@ -277,11 +320,15 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
             norm = _normalize(name)
             if norm in grid_normalized:
                 _, rowdata = grid_normalized[norm]
-        
+
         if rowdata is None:
-            skipped += 1
+            # item tidak ada di grid Portal → semua cell-nya skip
+            skipped += cells_per_item
+            done += cells_per_item
+            if not dry_run:
+                live_progress(done, total_cells, name)
             continue
-        
+
         if data_type == "tegangan":
             mv_vals = values.get("mv", [])
             hv_vals = values.get("hv", [])
@@ -293,15 +340,21 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                     if existing is not None and abs(float(existing) - float(mv_vals[h])) < 0.001:
                         skipped += 1
                     elif dry_run:
-                        print(f"  [DRY] {name} {col}(MV): {existing} → {mv_vals[h]}")
                         updates += 1
+                        if len(dry_samples) < 6:
+                            dry_samples.append(f"{name} {col}(MV): {existing} → {mv_vals[h]}")
                     else:
                         if pln.update_cell(data_type, rowdata, col, mv_vals[h]):
                             updates += 1
                         else:
-                            errors += 1
+                            errors += 1; error_list.append(f"{name} {col}(MV)={mv_vals[h]}")
                         time.sleep(0.05)
-                
+                else:
+                    skipped += 1
+                done += 1
+                if not dry_run:
+                    live_progress(done, total_cells, name)
+
                 # HV → k column
                 if h < len(hv_vals) and hv_vals[h] is not None:
                     col = f"k{h:02d}"
@@ -309,40 +362,57 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                     if existing is not None and abs(float(existing) - float(hv_vals[h])) < 0.001:
                         skipped += 1
                     elif dry_run:
-                        print(f"  [DRY] {name} {col}(HV): {existing} → {hv_vals[h]}")
                         updates += 1
+                        if len(dry_samples) < 6:
+                            dry_samples.append(f"{name} {col}(HV): {existing} → {hv_vals[h]}")
                     else:
                         if pln.update_cell(data_type, rowdata, col, hv_vals[h]):
                             updates += 1
                         else:
-                            errors += 1
+                            errors += 1; error_list.append(f"{name} {col}(HV)={hv_vals[h]}")
                         time.sleep(0.05)
+                else:
+                    skipped += 1
+                done += 1
+                if not dry_run:
+                    live_progress(done, total_cells, name)
         else:
             jams = values if isinstance(values, list) else []
             for h in range(jam_start, jam_end + 1):
                 if h >= len(jams) or jams[h] is None:
+                    skipped += 1
+                    done += 1
+                    if not dry_run:
+                        live_progress(done, total_cells, name)
                     continue
                 col = f"j{h:02d}"
                 existing = rowdata.get(col)
                 if existing is not None and str(existing) == str(jams[h]):
                     skipped += 1
                 elif dry_run:
-                    print(f"  [DRY] {name} {col}: {existing} → {jams[h]}")
                     updates += 1
+                    if len(dry_samples) < 6:
+                        dry_samples.append(f"{name} {col}: {existing} → {jams[h]}")
                 else:
                     if pln.update_cell(data_type, rowdata, col, jams[h]):
                         updates += 1
-                        print(f"  {G}[OK]{R} {name} {col}={jams[h]}")
                     else:
-                        errors += 1
-                        err(f"{name} {col}={jams[h]}")
+                        errors += 1; error_list.append(f"{name} {col}={jams[h]}")
                     time.sleep(0.05)
-    
-    # Summary
-    print(f"\n  {B}Summary:{R}")
-    print(f"    Updates : {updates}")
-    print(f"    Errors  : {errors}")
-    print(f"    Skipped : {skipped}")
+                done += 1
+                if not dry_run:
+                    live_progress(done, total_cells, name)
+
+    # akhiri bar live, lalu ringkasan
+    if not dry_run:
+        print()
+    summary_box(type_labels[data_type], updates, errors, skipped, total_cells)
+    if dry_run and dry_samples:
+        print(f"  {D}Contoh perubahan:{R}")
+        for s in dry_samples:
+            print(f"    {C}{s}{R}")
+    if error_list:
+        warn(f"{len(error_list)} error: " + "; ".join(error_list[:5]) + (" …" if len(error_list) > 5 else ""))
     return errors == 0
 
 # ============ INTERACTIVE MENU ============

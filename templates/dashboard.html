@@ -392,7 +392,11 @@
                 <span>📅 <strong>{{ date_str }}</strong></span>
             </div>
         </div>
-        <a href="/logout" class="btn-logout">Keluar</a>
+        <div style="display:flex; gap:8px; align-items:center;">
+            <a href="/auto" style="padding:6px 14px; border-radius:6px; text-decoration:none; font-size:12px; font-weight:600; border:1px solid #2a3f5f; color:#8b9bb4;">🤖 Auto Mode</a>
+            <a href="/setup" style="padding:6px 14px; border-radius:6px; text-decoration:none; font-size:12px; font-weight:600; border:1px solid #2a3f5f; color:#8b9bb4;">⚙ Setup</a>
+            <a href="/logout" class="btn-logout">Keluar</a>
+        </div>
     </div>
 
     <div class="container">
@@ -652,7 +656,8 @@
             
             <div class="modal-actions">
                 <button class="btn btn-cancel" onclick="closeBatchPeriodeModal()">Batal</button>
-                <button class="btn" id="batchPeriodeSubmitBtn" onclick="submitBatchPeriode()" style="display:none;">Simpan Semua</button>
+                <button class="btn" id="batchPeriodeDryRunBtn" onclick="submitBatchPeriode(true)" style="display:none; background:#ffd43b; color:#0d1b2a;">🔍 Dry-Run</button>
+                <button class="btn" id="batchPeriodeSubmitBtn" onclick="submitBatchPeriode(false)" style="display:none;">Simpan Semua</button>
             </div>
         </div>
     </div>
@@ -669,7 +674,8 @@
             </div>
             <div class="modal-actions">
                 <button class="btn btn-cancel" onclick="closeBatchModal()">Batal</button>
-                <button class="btn" id="batchSubmitBtn" onclick="submitBatch()">Simpan Semua</button>
+                <button class="btn btn-warning" onclick="submitBatch(true)" style="background:#ffd43b; color:#0d1b2a;">🔍 Dry-Run</button>
+                <button class="btn" id="batchSubmitBtn" onclick="submitBatch(false)">Simpan Semua</button>
             </div>
         </div>
     </div>
@@ -940,13 +946,28 @@
                 if (isTegangan) {
                     const mv = pData ? pData.mv_avg : '';
                     const hv = pData ? pData.hv_avg : '';
-                    const stats = pData ? `avg MV=${pData.mv_avg} (${pData.mv_min}-${pData.mv_max}) | HV=${pData.hv_avg} (${pData.hv_min}-${pData.hv_max})` : 'no data';
+                    let stats;
+                    if (pData) {
+                        stats = `MV=${pData.mv_avg} (${pData.mv_min}-${pData.mv_max}) | HV=${pData.hv_avg} (${pData.hv_min}-${pData.hv_max})`;
+                        if (pData.fallback) stats = `<span style="color:#ff8787">${pData.note || 'Fallback'}: MV=${pData.mv_avg} HV=${pData.hv_avg} (${pData.samples}d)</span>`;
+                    } else {
+                        stats = 'no data';
+                    }
                     html += `<td><input type="number" step="0.01" value="${mv}" id="batch_mv_${p}"></td>`;
                     html += `<td><input type="number" step="1" value="${hv}" id="batch_hv_${p}"></td>`;
                     html += `<td class="batch-stats">${stats}</td>`;
                 } else {
                     const val = pData ? pData.avg : '';
-                    const stats = pData ? `avg=${pData.raw_avg} (${pData.min}-${pData.max}) ${pData.samples}d` : 'no data';
+                    let stats;
+                    if (pData) {
+                        if (pData.fallback) {
+                            stats = `<span style="color:#ff8787">${pData.note || 'Fallback'} avg=${pData.raw_avg}A (${pData.samples}d)</span>`;
+                        } else {
+                            stats = `${pData.pattern_type || 'avg'}=${pData.pattern_avg || pData.raw_avg}A (${pData.min}-${pData.max}) ${pData.pattern_samples || pData.samples}d`;
+                        }
+                    } else {
+                        stats = 'no data';
+                    }
                     html += `<td><input type="number" step="1" value="${val}" id="batch_val_${p}"></td>`;
                     html += `<td class="batch-stats">${stats}</td>`;
                 }
@@ -962,7 +983,7 @@
             document.getElementById('batchModal').classList.remove('show');
         }
 
-        async function submitBatch() {
+        async function submitBatch(dryRun) {
             if (!currentBatch) return;
             const { type, itemId, emptyPeriods } = currentBatch;
             const isTegangan = type === 'tegangan-trafo';
@@ -994,29 +1015,38 @@
                 return;
             }
 
-            document.getElementById('batchSubmitBtn').disabled = true;
-            document.getElementById('batchSubmitBtn').textContent = 'Menyimpan...';
+            const btn = document.getElementById('batchSubmitBtn');
+            btn.disabled = true;
+            btn.textContent = dryRun ? 'Preview...' : 'Menyimpan...';
 
             try {
                 const resp = await fetch('/api/data/batch-input', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ type, item_id: itemId, periods, date: DATE_STR })
+                    body: JSON.stringify({ type, item_id: itemId, periods, date: DATE_STR, dry_run: !!dryRun })
                 });
                 const result = await resp.json();
                 if (result.success) {
                     const success = result.results.filter(r => r.success).length;
                     const fail = result.results.filter(r => !r.success).length;
-                    let msg = `✓ Batch selesai: ${success} berhasil`;
-                    if (fail > 0) msg += `, ${fail} gagal`;
-                    showToast(msg, fail > 0 ? 'error' : 'success');
-                    closeBatchModal();
-                    // Tawarkan sync ke Portal PLN
-                    if (success > 0) {
-                        const syncPeriodes = periods.map(p => p.periode);
-                        await offerPortalSync(type, syncPeriodes);
+                    if (dryRun) {
+                        let preview = `🔍 DRY-RUN: ${success} akan diinput\n`;
+                        result.results.forEach(r => {
+                            preview += `  P${String(r.periode).padStart(2,'0')}: ${r.value}\n`;
+                        });
+                        showToast(`🔍 Dry-run: ${success} item OK, tidak ada data dikirim`, 'success');
+                        alert(preview);
+                    } else {
+                        let msg = `✓ Batch selesai: ${success} berhasil`;
+                        if (fail > 0) msg += `, ${fail} gagal`;
+                        showToast(msg, fail > 0 ? 'error' : 'success');
+                        closeBatchModal();
+                        if (success > 0) {
+                            const syncPeriodes = periods.map(p => p.periode);
+                            await offerPortalSync(type, syncPeriodes);
+                        }
+                        setTimeout(() => location.reload(), 1500);
                     }
-                    setTimeout(() => location.reload(), 1500);
                 } else {
                     showToast('✗ ' + result.message, 'error');
                 }
@@ -1063,6 +1093,7 @@
             // Reset modal
             document.getElementById('batchPeriodeDetails').style.display = 'none';
             document.getElementById('batchPeriodeSubmitBtn').style.display = 'none';
+            document.getElementById('batchPeriodeDryRunBtn').style.display = 'none';
             
             // Hitung berapa item kosong per periode (dari DOM)
             const tabId = type === 'beban-penyulang' ? 'tab-penyulang' : 
@@ -1168,6 +1199,7 @@
             if (items.length === 0) {
                 document.getElementById('batchTableWrapper').innerHTML = '<p style="color:#8b9bb4; text-align:center; padding:20px;">Tidak ada item kosong di periode ini.</p>';
                 document.getElementById('batchPeriodeSubmitBtn').style.display = 'none';
+                document.getElementById('batchPeriodeDryRunBtn').style.display = 'none';
                 return;
             }
             
@@ -1189,15 +1221,29 @@
                     let stats;
                     if (pData && pData.is_ps) {
                         stats = `<span style="color:#ffd43b">⚡ ${pData.note}</span>`;
+                        if (pData.fallback) stats += ` <span style="color:#ff8787">[FALLBACK]</span>`;
+                    } else if (pData) {
+                        stats = pData.info || `MV=${pData.mv_avg} | HV=${pData.hv_avg} (${pData.samples}d)`;
+                        if (pData.fallback) stats += ` <span style="color:#ff8787">[FALLBACK]</span>`;
                     } else {
-                        stats = pData ? `MV avg=${pData.mv_avg} | HV avg=${pData.hv_avg} (${pData.samples}d)` : 'no data';
+                        stats = 'no data';
                     }
-                    html += `<td><input type="number" step="${pData && pData.is_ps ? '2' : '0.01'}" value="${mv}" id="bp_mv_${item.id}"></td>`;
+                    const step = pData && pData.is_ps ? '2' : '0.01';
+                    html += `<td><input type="number" step="${step}" value="${mv}" id="bp_mv_${item.id}"></td>`;
                     html += `<td><input type="number" step="0.01" value="${hv}" id="bp_hv_${item.id}"></td>`;
                     html += `<td class="batch-stats">${stats}</td>`;
                 } else {
                     const val = pData ? pData.avg : '';
-                    const stats = pData ? `${pData.pattern_type || 'avg'}=${pData.pattern_avg || pData.raw_avg}A (${pData.min}-${pData.max}) ${pData.pattern_samples || pData.samples}d` : 'no data';
+                    let stats;
+                    if (pData) {
+                        if (pData.fallback) {
+                            stats = `<span style="color:#ff8787">${pData.note || 'Fallback'} avg=${pData.raw_avg}A (${pData.samples}d)</span>`;
+                        } else {
+                            stats = `${pData.pattern_type || 'avg'}=${pData.pattern_avg || pData.raw_avg}A (${pData.min}-${pData.max}) ${pData.pattern_samples || pData.samples}d`;
+                        }
+                    } else {
+                        stats = 'no data';
+                    }
                     html += `<td><input type="number" step="1" value="${val}" id="bp_val_${item.id}"></td>`;
                     html += `<td class="batch-stats">${stats}</td>`;
                 }
@@ -1207,13 +1253,14 @@
             html += '</tbody></table>';
             document.getElementById('batchTableWrapper').innerHTML = html;
             document.getElementById('batchPeriodeSubmitBtn').style.display = 'inline-block';
+            document.getElementById('batchPeriodeDryRunBtn').style.display = 'inline-block';
         }
 
         function closeBatchPeriodeModal() {
             document.getElementById('batchPeriodeModal').classList.remove('show');
         }
 
-        async function submitBatchPeriode() {
+        async function submitBatchPeriode(dryRun) {
             if (!currentBatchPeriode || currentBatchPeriode.periode === null) return;
             const { type, periode, items } = currentBatchPeriode;
             const isTegangan = type === 'tegangan-trafo';
@@ -1239,30 +1286,39 @@
                 return;
             }
             
-            document.getElementById('batchPeriodeSubmitBtn').disabled = true;
-            document.getElementById('batchPeriodeSubmitBtn').textContent = 'Menyimpan...';
+            const btn = document.getElementById('batchPeriodeSubmitBtn');
+            btn.disabled = true;
+            btn.textContent = dryRun ? 'Preview...' : 'Menyimpan...';
             
             try {
                 const resp = await fetch('/api/data/batch-input', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
-                        type, mode: 'per-periode', periode, items: itemPayload, date: DATE_STR
+                        type, mode: 'per-periode', periode, items: itemPayload, date: DATE_STR, dry_run: !!dryRun
                     })
                 });
                 const result = await resp.json();
                 if (result.success) {
                     const success = result.results.filter(r => r.success).length;
                     const fail = result.results.filter(r => !r.success).length;
-                    let msg = `✓ Batch P${String(periode).padStart(2,'0')}: ${success} berhasil`;
-                    if (fail > 0) msg += `, ${fail} gagal`;
-                    showToast(msg, fail > 0 ? 'error' : 'success');
-                    closeBatchPeriodeModal();
-                    // Tawarkan sync ke Portal PLN
-                    if (success > 0) {
-                        await offerPortalSync(type, [periode]);
+                    if (dryRun) {
+                        let preview = `🔍 DRY-RUN P${String(periode).padStart(2,'0')}: ${success} item akan diinput\n`;
+                        result.results.forEach(r => {
+                            preview += `  ${r.value}\n`;
+                        });
+                        showToast(`🔍 Dry-run: ${success} item OK, tidak ada data dikirim`, 'success');
+                        alert(preview);
+                    } else {
+                        let msg = `✓ Batch P${String(periode).padStart(2,'0')}: ${success} berhasil`;
+                        if (fail > 0) msg += `, ${fail} gagal`;
+                        showToast(msg, fail > 0 ? 'error' : 'success');
+                        closeBatchPeriodeModal();
+                        if (success > 0) {
+                            await offerPortalSync(type, [periode]);
+                        }
+                        setTimeout(() => location.reload(), 1500);
                     }
-                    setTimeout(() => location.reload(), 1500);
                 } else {
                     showToast('✗ ' + result.message, 'error');
                 }
@@ -1270,8 +1326,8 @@
                 showToast('Error: ' + e.message, 'error');
             }
             
-            document.getElementById('batchPeriodeSubmitBtn').disabled = false;
-            document.getElementById('batchPeriodeSubmitBtn').textContent = 'Simpan Semua';
+            btn.disabled = false;
+            btn.textContent = 'Simpan Semua';
         }
     </script>
 </body>

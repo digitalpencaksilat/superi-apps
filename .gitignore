@@ -26,3 +26,15 @@ Thumbs.db
 
 # Logs
 *.log
+auto_log.txt
+
+# Agent / tool state (local only)
+.hermes/
+.opencode/
+
+# Biometric / face photos (local only, jangan di-push)
+photo/
+
+# Bypass scripts (sensitif, tidak masuk repo public)
+bypass.py
+gama_absen_bypass.py
