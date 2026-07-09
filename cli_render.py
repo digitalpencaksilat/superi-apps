@@ -270,3 +270,37 @@ def render_data_summary(total_items, total_filled, total_empty):
     return (f"  Total: {total_items} item · "
             f"{total_filled}/{total_slots} periode terisi · "
             f"{total_empty} masih kosong")
+
+
+def fmt_progress_bar(n, total, width=24):
+    """[████████░░░░░░░░] 16/32 (50%). Pure string, no ANSI.
+
+    Clamps n to [0, total]; total<=0 returns an empty bar with '0/0'.
+    """
+    if total <= 0:
+        return f"[{_EMPTY * width}] 0/0"
+    n = min(max(n, 0), total)
+    filled = int(round(width * n / total))
+    bar = _FILLED * filled + _EMPTY * (width - filled)
+    pct = int(round(100 * n / total))
+    return f"[{bar}] {n}/{total} ({pct}%)"
+
+
+def render_sync_summary(label, ok_count, fail_count, skip_count, total):
+    """Boxed one-line sync summary (3 lines). Pure string, no ANSI inside inner.
+
+    Mirip render_summary_box tapi dengan field skip + label panjang bebas.
+    Border width = len(inner) so the box always aligns.
+    """
+    inner = f"  Ringkasan {label}: ✓ {ok_count} update"
+    if fail_count:
+        inner += f"  ✗ {fail_count} gagal"
+    if skip_count:
+        inner += f"  ⊘ {skip_count} skip"
+    inner += f"  ({ok_count + fail_count}/{total})"
+    w = len(inner)
+    return [
+        f"  ┏{'━' * w}┓",
+        f"  ┃{inner}┃",
+        f"  ┗{'━' * w}┛",
+    ]

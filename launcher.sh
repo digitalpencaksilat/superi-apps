@@ -40,8 +40,13 @@ elif [ "$1" == "input" ] || [ "$1" == "i" ]; then
 elif [ "$1" == "sync" ] || [ "$1" == "s" ]; then
     cd "$SUPERI_DIR"
     shift
-    echo "🔄 SUPER-I → Portal APD Sync"
-    $PYTHON superi_sync.py "$@"
+    if [ $# -eq 0 ]; then
+        echo "🔄 Sync ke Portal APD sekarang ada di CLI → menu [P]"
+        $PYTHON superi_app.py          # menu sync sekarang di cli ([P])
+    else
+        echo "🔄 SUPER-I → Portal APD Sync (non-interactive)"
+        $PYTHON superi_sync.py "$@"   # --type/--jam/--dry-run untuk script/cron
+    fi
 
 elif [ "$1" == "auto" ] || [ "$1" == "a" ]; then
     cd "$SUPERI_DIR"
@@ -58,12 +63,12 @@ else
     echo "  web, w           Jalankan web dashboard (http://localhost:8888)"
     echo "  cli, c           Jalankan CLI interaktif"
     echo "  input, i [opts]  Jalankan CLI scripting (input ke SUPER-I)"
-    echo "  sync, s [opts]   Sync data SUPER-I → Portal APD Jakarta"
+    echo "  sync, s [opts]   Sync ke Portal APD (no-args = buka CLI; --type/--jam = non-interactive)"
     echo ""
     echo "Examples:"
     echo "  superi web"
     echo "  superi cli"
-    echo "  superi sync                          # menu interaktif"
+    echo "  superi sync                          # buka CLI (menu [P] Sync)"
     echo "  superi sync --type all --jam 09      # sync semua tipe jam 09"
     echo "  superi sync --type penyulang --jam 08-10 --dry-run"
     echo "  superi input --help"

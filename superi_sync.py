@@ -30,6 +30,8 @@ __version__ = "1.0.0"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
+import cli_render  # shared pure-string render helpers (fmt_progress_bar, render_sync_summary, …)
+
 # ============ CONFIG LOADER ============
 # Credentials & config dibaca dari .superi_config.json (gitignored).
 # Gunakan .superi_config.example.json sebagai template.
@@ -85,50 +87,30 @@ PORTAL_ENDPOINTS = {
 }
 
 # ============ UI ============
-R = '\033[0m'; B = '\033[1m'; G = '\033[92m'; Y = '\033[93m'; RE = '\033[91m'; C = '\033[96m'; D = '\033[2m'
+R = '\033[0m'; B = '\033[1m'; G = '\033[92m'; Y = '\033[93m'; RE = '\033[91m'; C = '\033[96m'; D = '\033[2m'; W = '\033[97m'
 
 def header(t):
     bar = '━' * 60
-    print(f"\n{B}{C}{bar}{R}\n{B}{C}{t.center(60)}{R}\n{B}{C}{bar}{R}")
+    print(f"\n{C}{bar}{R}\n  {B}{W}{t}{R}\n{C}{bar}{R}")
 def ok(t): print(f"  {G}✓ {t}{R}")
 def err(t): print(f"  {RE}✗ {t}{R}")
 def info(t): print(f"  {C}ℹ {t}{R}")
 def warn(t): print(f"  {Y}⚠ {t}{R}")
 
 # ============ PROGRESS (compact, mirip superi cli) ============
-_BAR_F = '█'
-_BAR_E = '░'
-
-def progress_bar(n, total, width=24):
-    """Bar compact: [████████░░░░░░░░] 16/32 (50%). Tanpa ANSI di dalam → \r overwrite bersih."""
-    if total <= 0:
-        return f"[{_BAR_E * width}] 0/0"
-    n = min(max(n, 0), total)
-    filled = int(round(width * n / total))
-    bar = _BAR_F * filled + _BAR_E * (width - filled)
-    pct = int(round(100 * n / total))
-    return f"[{bar}] {n}/{total} ({pct}%)"
+# Helper render (fmt_progress_bar, render_sync_summary) ada di cli_render.py (shared, pure-string).
 
 def live_progress(done, total, name=""):
-    """Progress bar 1-baris yang di-overwrite (\\r + erase-to-end \\033[K)."""
+    """Progress bar 1-baris yang di-overwrite (\\r + erase-to-end \\033[K). Plain, tanpa ANSI — mirip cli fmt_progress_line."""
     nm = name[:18].ljust(18) if name else ""
-    tail = f"  {D}{nm}{R}" if nm else ""
-    sys.stdout.write(f"\r  {progress_bar(done, total)}{tail} {G}✓{R}\033[K")
+    tail = f"  {nm}" if nm else ""
+    sys.stdout.write(f"\r  {cli_render.fmt_progress_bar(done, total)}{tail} ✓\033[K")
     sys.stdout.flush()
 
 def summary_box(label, ok_count, fail_count, skip_count, total):
-    """Box 1-baris ringkasan, mirip cli_render.render_summary_box."""
-    inner = f"  Ringkasan {label}: ✓ {ok_count} update"
-    if fail_count:
-        inner += f"  ✗ {fail_count} gagal"
-    if skip_count:
-        inner += f"  ⊘ {skip_count} skip"
-    inner += f"  ({ok_count + fail_count}/{total})"
-    w = len(inner)
-    color = G if fail_count == 0 else Y
-    print(f"  {color}┏{'━' * w}┓{R}")
-    print(f"  {color}┃{inner}┃{R}")
-    print(f"  {color}┗{'━' * w}┛{R}")
+    """Box ringkasan sync — pakai cli_render.render_sync_summary, plain (tanpa ANSI, mirip cli render_summary_box)."""
+    for line in cli_render.render_sync_summary(label, ok_count, fail_count, skip_count, total):
+        print(line)
 
 # ============ SUPER-I API CLIENT ============
 def superi_login() -> Optional[str]:
@@ -415,67 +397,9 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
         warn(f"{len(error_list)} error: " + "; ".join(error_list[:5]) + (" …" if len(error_list) > 5 else ""))
     return errors == 0
 
-# ============ INTERACTIVE MENU ============
-def menu():
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    while True:
-        header(f"⚡ SUPER-I → Portal APD Sync  v{__version__}")
-        print(f"  GI       : GI MANGGARAI")
-        print(f"  Tanggal  : {today}")
-        print()
-        print(f"  {B}Pilih data yang akan di-sync:{R}")
-        print(f"    1. Beban Penyulang  (32 feeder)")
-        print(f"    2. Beban Trafo      (3 trafo)")
-        print(f"    3. Tegangan Trafo   (5 trafo, MV+HV)")
-        print(f"    4. SEMUA            (penyulang + trafo + tegangan)")
-        print(f"    0. Keluar")
-        print()
-        
-        choice = input(f"  {C}Pilih [0-4]: {R}").strip()
-        if choice == "0":
-            print(f"\n  {C}Bye!{R}\n")
-            break
-        
-        type_map = {"1": ["penyulang"], "2": ["trafo"], "3": ["tegangan"], "4": ["penyulang", "trafo", "tegangan"]}
-        if choice not in type_map:
-            err("Pilihan tidak valid")
-            continue
-        
-        types = type_map[choice]
-        
-        # Jam
-        print()
-        jam_input = input(f"  {C}Jam (HH atau HH-HH, enter=semua): {R}").strip() or "0-23"
-        try:
-            if "-" in jam_input:
-                js, je = map(int, jam_input.split("-"))
-            else:
-                js = je = int(jam_input)
-            js = max(0, min(23, js)); je = max(0, min(23, je))
-        except:
-            err("Format jam salah")
-            continue
-        
-        # Tanggal
-        date_input = input(f"  {C}Tanggal [{today}]: {R}").strip() or today
-        
-        # Dry-run
-        print(f"\n  {B}--- DRY-RUN PREVIEW ---{R}")
-        for dt in types:
-            do_sync(dt, js, je, date_input, dry_run=True)
-        
-        # Confirm
-        print()
-        confirm = input(f"  {Y}Lanjut LIVE SYNC? (y/n): {R}").strip().lower()
-        if confirm == 'y':
-            print(f"\n  {B}--- LIVE SYNC ---{R}")
-            for dt in types:
-                do_sync(dt, js, je, date_input, dry_run=False)
-        else:
-            warn("Dibatalkan")
-        
-        input(f"\n  {D}[Enter untuk lanjut...]{R}")
+# Menu interaktif sudah dipindah ke superi_app.py (superi cli → [P] Sync ke Portal APD).
+# superi_sync.py sekarang library: do_sync() dipanggil cli/web/auto.
+# Non-interactive: superi sync --type ... --jam ... --dry-run
 
 # ============ CLI ARGS ============
 def main():
@@ -511,7 +435,7 @@ def main():
         elif a == '--date' and i+1 < len(args):
             date_str = args[i+1]
     
-    # Non-interactive mode
+    # Non-interactive mode (untuk script/cron: superi sync --type ... --jam ...)
     if data_type:
         types = ["penyulang", "trafo", "tegangan"] if data_type == 'all' else [data_type]
         for dt in types:
@@ -519,9 +443,12 @@ def main():
             if not success and not dry_run:
                 sys.exit(1)
         sys.exit(0)
-    
-    # Interactive menu
-    menu()
+
+    # No args → arahkan ke superi cli (menu sync sekarang di cli)
+    print(f"\n  Menu sync sekarang tergabung di SUPER-I CLI.")
+    print(f"  Jalankan:  superi cli   →  pilih [P] Sync ke Portal APD")
+    print(f"  Atau non-interactive: superi sync --type all --jam 08 --dry-run\n")
+    sys.exit(0)
 
 if __name__ == '__main__':
     main()

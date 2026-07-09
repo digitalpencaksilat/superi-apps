@@ -892,6 +892,86 @@ def offer_portal_sync(data_type, periodes, date_str):
     else:
         print(f"\n  ⚠ Sebagian sync gagal — cek log di atas")
 
+def sync_portal_menu(date_str):
+    """Sub-menu standalone: sync data SUPER-I → Portal APD (tanpa batch fill).
+
+    Parity dengan offer_portal_sync tapi dipanggil langsung dari menu utama
+    untuk re-sync periode yang sudah terisi di SUPER-I.
+    """
+    clear()
+    header("🔄 SYNC KE PORTAL APD")
+    print()
+    print(f"  {C['D']}Sumber: SUPER-I APP  →  Tujuan: Portal APD Jakarta{C['R']}")
+    print(f"  {C['D']}Tanggal: {date_str}{C['R']}")
+    print()
+
+    sub_header("Pilih jenis data")
+    print(f"  {C['C']}[1]{C['R']} Beban Penyulang  (32 feeder)")
+    print(f"  {C['C']}[2]{C['R']} Beban Trafo      (3 trafo)")
+    print(f"  {C['C']}[3]{C['R']} Tegangan Trafo   (5 trafo, MV+HV)")
+    print(f"  {C['C']}[4]{C['R']} SEMUA")
+    print(f"  {C['D']}[0]{C['R']} Kembali")
+    choice = input(f"  {C['B']}Pilih ▸ {C['R']}").strip()
+
+    type_map = {"1": ["penyulang"], "2": ["trafo"], "3": ["tegangan"], "4": ["penyulang", "trafo", "tegangan"]}
+    if choice not in type_map:
+        return
+    types = type_map[choice]
+
+    # Jam
+    jam_input = input_with_default("Jam (HH atau HH-HH, enter=semua)", "0-23")
+    try:
+        if "-" in jam_input:
+            js, je = map(int, jam_input.split("-"))
+        else:
+            js = je = int(jam_input)
+        js = max(0, min(23, js))
+        je = max(0, min(23, je))
+    except ValueError:
+        print(f"  {C['RE']}✗ Format jam salah{C['R']}")
+        input(f"  {C['D']}[Enter]{C['R']}")
+        return
+
+    date_input = input_with_default("Tanggal", date_str)
+
+    # Cek modul + kredensial Portal APD
+    try:
+        import superi_sync
+    except ImportError as e:
+        print(f"  {C['RE']}✗ Modul superi_sync tidak ditemukan: {e}{C['R']}")
+        input(f"  {C['D']}[Enter]{C['R']}")
+        return
+    if not superi_sync.PORTAL_USER or not superi_sync.PORTAL_PASS:
+        print(f"  {C['RE']}✗ Credentials Portal APD belum diset di .superi_config.json{C['R']}")
+        print(f"  {C['D']}  Setup via menu [S]{C['R']}")
+        input(f"  {C['D']}[Enter]{C['R']}")
+        return
+
+    # Dry-run preview
+    sub_header("DRY-RUN PREVIEW")
+    for dt in types:
+        superi_sync.do_sync(dt, js, je, date_input, dry_run=True)
+    print()
+
+    # Konfirmasi live
+    if not confirm(f"{C['Y']}Lanjut LIVE SYNC?{C['R']}"):
+        print(f"  {C['Y']}⊘ Dibatalkan — bisa di-sync nanti{C['R']}")
+        input(f"  {C['D']}[Enter]{C['R']}")
+        return
+
+    sub_header("LIVE SYNC")
+    all_ok = True
+    for dt in types:
+        ok = superi_sync.do_sync(dt, js, je, date_input, dry_run=False)
+        if not ok:
+            all_ok = False
+    print()
+    if all_ok:
+        print(f"  {C['G']}✓ Sync ke Portal APD selesai{C['R']}")
+    else:
+        print(f"  {C['Y']}⚠ Sebagian sync gagal — cek detail di atas{C['R']}")
+    input(f"  {C['D']}[Enter untuk kembali...]{C['R']}")
+
 def batch_fill(token, data_type, gi_id, date_str, user_info):
     """Isi semua periode kosong untuk satu item."""
     ep = ENDPOINTS[data_type]
@@ -1671,7 +1751,7 @@ def main():
         _auto_cfg = load_config()
         _auto_on = _auto_cfg.get("auto_enabled", False)
         _auto_badge = f"{C['G']}ON{C['R']}" if _auto_on else f"{C['RE']}OFF{C['R']}"
-        print(f"  {C['C']}[D]{C['R']} ⏰ Auto Mode [{_auto_badge}]")
+        print(f"  {C['C']}[P]{C['R']} 🔄 Sync ke Portal APD    {C['C']}[D]{C['R']} ⏰ Auto Mode [{_auto_badge}]")
         print()
         print(f"  {C['D']}{'─' * 56}{C['R']}")
 
@@ -1726,6 +1806,8 @@ def main():
             elif choice == 'd':
                 auto_mode_menu()
                 config = load_config()
+            elif choice == 'p':
+                sync_portal_menu(date_str)
         except Exception as e:
             print(f"\n  ✗ Error: {e}")
             input(f"  {C['D']}[Enter]{C['R']}")

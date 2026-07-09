@@ -243,6 +243,44 @@ class RenderDataSummaryTests(unittest.TestCase):
         self.assertIn("48/48", s)
 
 
+class FmtProgressBarTests(unittest.TestCase):
+    def test_zero(self):
+        self.assertEqual(r.fmt_progress_bar(0, 32),
+                         "[░░░░░░░░░░░░░░░░░░░░░░░░] 0/32 (0%)")
+    def test_half(self):
+        self.assertEqual(r.fmt_progress_bar(16, 32),
+                         "[████████████░░░░░░░░░░░░] 16/32 (50%)")
+    def test_full(self):
+        self.assertEqual(r.fmt_progress_bar(32, 32),
+                         "[████████████████████████] 32/32 (100%)")
+    def test_total_zero_safe(self):
+        self.assertIn("0/0", r.fmt_progress_bar(0, 0))
+    def test_clamps_overshoot(self):
+        self.assertEqual(r.fmt_progress_bar(40, 32),
+                         r.fmt_progress_bar(32, 32))
+
+
+class RenderSyncSummaryTests(unittest.TestCase):
+    def test_no_fail_no_skip(self):
+        lines = r.render_sync_summary("Beban Penyulang", 192, 0, 0, 768)
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(lines[0].startswith("  ┏"))
+        self.assertTrue(lines[2].startswith("  ┗"))
+        self.assertIn("✓ 192 update", lines[1])
+        self.assertNotIn("gagal", lines[1])
+        self.assertNotIn("skip", lines[1])
+        self.assertIn("(192/768)", lines[1])
+    def test_with_fail_and_skip(self):
+        lines = r.render_sync_summary("Tegangan", 8, 2, 4, 240)
+        self.assertIn("✗ 2 gagal", lines[1])
+        self.assertIn("⊘ 4 skip", lines[1])
+        self.assertIn("(10/240)", lines[1])
+    def test_box_border_width_matches_inner(self):
+        lines = r.render_sync_summary("X", 1, 0, 0, 4)
+        self.assertEqual(len(lines[0]), len(lines[1]))
+        self.assertEqual(len(lines[1]), len(lines[2]))
+
+
 class SuperiAppImportTests(unittest.TestCase):
     def test_imports_with_cli_render(self):
         import importlib
