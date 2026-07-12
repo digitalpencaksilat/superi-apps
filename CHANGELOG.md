@@ -5,6 +5,48 @@ Semua perubahan penting pada project ini akan didokumentasikan di file ini.
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/),
 dan project ini menggunakan [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.1.0] — 2026-07-12
+
+### Added
+
+- **Auto Mode terjadwal** untuk menjalankan input dan sinkronisasi otomatis,
+  termasuk retry, pengaturan melalui CLI/Web, serta instalasi jadwal cron dan
+  Windows Task Scheduler.
+- **Dukungan Windows portable** dengan launcher, setup Python lokal, dan
+  penanganan encoding console Windows.
+- **Renderer CLI terpusat** untuk tabel input, batch fill, ringkasan dinamis,
+  indikator keterisian 24 periode, serta test otomatis untuk hasil render.
+- **Halaman Auto Mode dan Setup pada Web UI**, dilengkapi progress sinkronisasi
+  serta smart-suggest yang konsisten dengan CLI.
+- **Menu sinkronisasi Portal APD pada CLI** dan API library pada
+  `superi_sync.py` agar proses sinkronisasi dapat digunakan ulang oleh modul
+  lain.
+- **Konfigurasi `history_days`** untuk memilih periode analisis smart-suggest
+  selama 3, 7, atau 14 hari, dengan nilai default 7 hari pada CLI dan Web.
+
+### Changed
+
+- Tampilan menu dan halaman CLI dirapikan agar konsisten, termasuk tabel data
+  yang menyesuaikan lebar terminal dan ringkasan status pengisian.
+- Smart-suggest CLI dan Web diselaraskan agar menggunakan pola
+  weekday/weekend, pembulatan beban, serta aturan tegangan masing-masing trafo.
+- Launcher macOS/Linux menggunakan interpreter virtual environment secara
+  konsisten, sementara proses Windows dijalankan tanpa kebutuhan instalasi
+  tingkat sistem.
+- Konfigurasi Portal APD disatukan dengan konfigurasi utama aplikasi.
+
+### Fixed
+
+- Perhitungan saran tegangan menggunakan histori pada periode jam yang sesuai.
+- Pembulatan MV mengikuti aturan masing-masing trafo dan HV trafo PS mengikuti
+  MV trafo sumber.
+- Batch tegangan Web tidak lagi menghasilkan kolom kosong akibat konteks
+  weekday/weekend yang hilang.
+- Auto Mode lebih tahan terhadap kegagalan sementara melalui retry yang lebih
+  aman, jadwal Windows lima-menitan, dan penanganan output console.
+- Kotak ringkasan CLI tidak lagi memotong angka pada terminal dengan lebar
+  berbeda.
+
 ## [1.0.0] — 2026-06-19
 
 ### 🎉 Initial Release
@@ -46,4 +88,5 @@ otomasi pekerjaan operator Gardu Induk 20kV.
 - Troubleshooting guide untuk error umum
 - Konfigurasi & deployment instructions
 
+[1.1.0]: https://github.com/digitalpencaksilat/superi-apps/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/digitalpencaksilat/superi-apps/releases/tag/v1.0.0

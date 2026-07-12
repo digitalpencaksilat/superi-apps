@@ -20,6 +20,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+import superi_app as _cli  # shared config helper (get_history_days, etc.)
+
 app = Flask(__name__)
 app.secret_key = os.urandom(32)
 
@@ -80,7 +82,7 @@ def api_get(token, path, params=None):
 
 def _teg_mv_decimals(name: str) -> int:
     """Aturan pembulatan MV tegangan per trafo (parity dengan superi_app.py).
-    
+
     - TRAFO PS 1 / TRAFO PS 2 → 0 desimal (bulat: 385, 390)
     - TRAFO 1                → 1 desimal (20.3, 20.4)
     - TRAFO 2 / 3 / lainnya  → 2 desimal (20.43)
@@ -102,13 +104,13 @@ def _round_mv(name: str, mv_avg: float):
     return rounded
 
 
-def learn_pattern(token, gi_id, data_type, item_id, days_back=14):
+def learn_pattern(token, gi_id, data_type, item_id, days_back=None):
     """
-    Belajar pola beban/tegangan per periode dari data historis (14 hari).
+    Belajar pola beban/tegangan per periode dari data historis (N hari, default dari config).
     PARITY dengan CLI superior_app.py smart_suggest_from_cache / smart_suggest_tegangan_from_cache.
 
     Perbedaan dari versi lama:
-    - 14 hari (bukan 7)
+    - N hari (default config history_days, fallback 7; boleh 3/7/14)
     - Weekday/weekend aware (50% pattern + 50% base)
     - Round kelipatan 5 untuk beban, aturan trafo untuk tegangan MV
     - Clamp ke range histori pattern
@@ -116,6 +118,8 @@ def learn_pattern(token, gi_id, data_type, item_id, days_back=14):
 
     Return dict: {periode: {avg, min, max, samples, ...}}
     """
+    if days_back is None:
+        days_back = _cli.get_history_days()
     from collections import defaultdict
     from datetime import datetime, timedelta
     from concurrent.futures import ThreadPoolExecutor
@@ -670,16 +674,18 @@ def api_smart_suggest():
     
     path = "/gama/opgi-20kv/operator-gi/beban-penyulang" if data_type == "beban-penyulang" else \
            "/gama/opgi-20kv/operator-gi/beban-trafo"
-    
+
     today = datetime.strptime(date_str, "%Y-%m-%d")
     is_weekend = today.weekday() >= 5
-    
-    # Kumpulkan data 14 hari untuk pattern yang robust
-    base_vals = []  # rata-rata 7 hari periode sama
+
+    hist_days = _cli.get_history_days()
+
+    # Kumpulkan data N hari untuk pattern yang robust
+    base_vals = []  # rata-rata N hari periode sama
     weekday_vals = []  # rata-rata weekday periode sama
     weekend_vals = []  # rata-rata weekend periode sama
-    
-    for offset in range(1, 15):
+
+    for offset in range(1, hist_days + 1):
         d = today - timedelta(days=offset)
         date_key = d.strftime("%Y-%m-%d")
         d_is_weekend = d.weekday() >= 5
@@ -694,8 +700,7 @@ def api_smart_suggest():
             for e in it.get("beban", []):
                 if e["periode"] == periode:
                     val = e["beban"]
-                    if offset <= 7:
-                        base_vals.append(val)
+                    base_vals.append(val)
                     
                     if d_is_weekend:
                         weekend_vals.append(val)
@@ -721,8 +726,8 @@ def api_smart_suggest():
             d = today - timedelta(days=offset)
             return api_get(token, path, {"garduIndukId": 222, "date": d.strftime("%Y-%m-%d")})
         
-        with ThreadPoolExecutor(max_workers=7) as executor:
-            results = list(executor.map(fetch_prev_day, range(1, 8)))
+        with ThreadPoolExecutor(max_workers=min(hist_days, 8)) as executor:
+            results = list(executor.map(fetch_prev_day, range(1, hist_days + 1)))
         
         for result in results:
             items = result.get("data", {}).get("items", [])
@@ -769,7 +774,7 @@ def api_batch_pattern():
     token = session["token"]
     data_type = request.args.get("type")
     periode = request.args.get("periode", type=int)
-    days = request.args.get("days", 14, type=int)  # ambil 14 hari untuk akurasi
+    days = request.args.get("days", _cli.get_history_days(), type=int)  # default dari config
     date_str = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
     
     from collections import defaultdict
@@ -953,11 +958,11 @@ PS_RULES = {
 @login_required
 def api_batch_pattern_tegangan():
     """
-    API khusus tegangan: pola 14 hari + weekday/weekend + aturan PS1/PS2 dynamic.
+    API khusus tegangan: pola N hari (config) + weekday/weekend + aturan PS1/PS2 dynamic.
     PARITY dengan CLI smart_suggest_tegangan_from_cache + fallback_tegangan_from_cache.
 
     Logika:
-    - 14 hari historis, weekday/weekend aware (50% pattern + 50% base)
+    - N hari historis (default config history_days, fallback 7), weekday/weekend aware (50% pattern + 50% base)
     - MV: pembulatan per trafo (PS=0des, T1=1des, lain=2des), clamp range
     - HV PS1 = MV TRAFO 1 (dinamis lookup di cache), HV PS2 = MV TRAFO 3
     - HV trafo biasa = integer ~150kV
@@ -965,7 +970,7 @@ def api_batch_pattern_tegangan():
     """
     token = session["token"]
     periode = request.args.get("periode", type=int)
-    days = request.args.get("days", 14, type=int)
+    days = request.args.get("days", _cli.get_history_days(), type=int)
     date_str = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
 
     from collections import defaultdict
@@ -1401,7 +1406,7 @@ def api_dry_run():
     }
     path = paths[data_type]
 
-    # Build cache untuk item ini (semua periode, 14 hari)
+    # Build cache untuk item ini (semua periode, N hari dari config)
     cache = defaultdict(lambda: {"all": [], "weekday": [], "weekend": []})
     item_name = ""
 
@@ -1410,7 +1415,7 @@ def api_dry_run():
         return d.weekday() >= 5, api_get(token, path, {"garduIndukId": 222, "date": d.strftime("%Y-%m-%d")})
 
     with ThreadPoolExecutor(max_workers=8) as executor:
-        results = list(executor.map(fetch_day, range(1, 15)))
+        results = list(executor.map(fetch_day, range(1, _cli.get_history_days() + 1)))
 
     for is_weekend, result in results:
         items = result.get("data", {}).get("items", [])

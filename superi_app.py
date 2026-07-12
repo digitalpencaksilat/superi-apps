@@ -120,6 +120,18 @@ def save_config(cfg):
     with open(CONFIG_FILE, 'w') as f:
         json.dump(cfg, f, indent=2)
 
+_VALID_HISTORY_DAYS = {3, 7, 14}
+
+def get_history_days():
+    """Baca history_days dari config, validasi (3/7/14), fallback 7."""
+    cfg = load_config()
+    val = cfg.get("history_days", 7)
+    try:
+        val = int(val)
+    except (TypeError, ValueError):
+        return 7
+    return val if val in _VALID_HISTORY_DAYS else 7
+
 def login(nip, password):
     req = urllib.request.Request(AUTH_URL,
         data=json.dumps({"nip": nip, "password": password}).encode(),
@@ -170,13 +182,16 @@ def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photo
 # MENU SYSTEM
 # ============================================================
 
-def fetch_history_bulk(token, data_type, gi_id, date_str, days_back=14, _cache={}):
+def fetch_history_bulk(token, data_type, gi_id, date_str, days_back=None, _cache={}):
     """
-    Fetch 14 hari data SEKALI saja, return dict dengan semua data periode dan weekday/weekend flag.
+    Fetch N hari data SEKALI saja, return dict dengan semua data periode dan weekday/weekend flag.
+    days_back default dari config (history_days, fallback 7).
     Reuse hasil ini untuk multiple item agar tidak refetch.
     
-    Cached per (data_type, gi_id, date_str) — call kedua di hari yang sama instant.
+    Cached per (data_type, gi_id, date_str, days_back) — call kedua di hari yang sama instant.
     """
+    if days_back is None:
+        days_back = get_history_days()
     cache_key = (data_type, gi_id, date_str, days_back)
     if cache_key in _cache:
         return _cache[cache_key]
@@ -389,16 +404,19 @@ def smart_suggest_tegangan_from_cache(cache, item_id, periode, target_is_weekend
     
     return smart_mv, smart_hv, info
 
-def smart_suggest_value(token, data_type, item_id, periode, date_str, days_back=14):
+def smart_suggest_value(token, data_type, item_id, periode, date_str, days_back=None):
     """
     Smart suggest berdasarkan:
     1. Weekday vs weekend pattern
-    2. 14 hari historis
+    2. N hari historis (default dari config: history_days, fallback 7)
     3. Range clamping
     4. Kelipatan 5 untuk beban
     """
     from datetime import timedelta, datetime as dt
     from concurrent.futures import ThreadPoolExecutor
+
+    if days_back is None:
+        days_back = get_history_days()
     
     today = dt.strptime(date_str, "%Y-%m-%d")
     is_target_weekend = today.weekday() >= 5
@@ -742,7 +760,7 @@ def input_single(token, data_type, gi_id, date_str, user_info):
         input(f"  {C['D']}[Enter]{C['R']}")
         return
     
-    # Input nilai dengan saran SMART (weekday/weekend, 14h history, kelipatan 5)
+    # Input nilai dengan saran SMART (weekday/weekend, histori N hari, kelipatan 5)
     suggested = ""
     suggested_mv = ""
     suggested_hv = ""
@@ -765,7 +783,7 @@ def input_single(token, data_type, gi_id, date_str, user_info):
             print(f"    → Saran dari P{prev_entry['periode']:02d}: MV={prev_mv}kV, HV={prev_hv}kV")
     else:
         # Beban: SMART SUGGEST (weekday/weekend aware)
-        sys.stdout.write(f"    🧠 Menganalisis pola 14 hari... ")
+        sys.stdout.write(f"    🧠 Menganalisis pola {get_history_days()} hari... ")
         sys.stdout.flush()
         smart_val, info = smart_suggest_value(token, data_type, item_id, per, date_str)
         if smart_val is not None:
@@ -1038,7 +1056,7 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
         is_weekend = today.weekday() >= 5
         day_label = "Weekend" if is_weekend else "Weekday"
         
-        print(f"    🧠 Menganalisis pola 14 hari ({day_label})...")
+        print(f"    🧠 Menganalisis pola {get_history_days()} hari ({day_label})...")
         cache = fetch_history_bulk(token, data_type, gi_id, date_str)
         
         # Hitung suggest per-periode
@@ -1125,7 +1143,7 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
         # Beban: SMART SUGGEST untuk satu nilai yang dipakai di semua periode kosong
         # Pakai periode pertama kosong sebagai referensi
         ref_periode = empty_periods[0]
-        print(f"    🧠 Menganalisis pola 14 hari untuk P{ref_periode:02d}...")
+        print(f"    🧠 Menganalisis pola {get_history_days()} hari untuk P{ref_periode:02d}...")
         smart_val, info = smart_suggest_value(token, data_type, item["id"], ref_periode, date_str)
         if smart_val is not None:
             print(f"    → Smart suggest: {smart_val}A ({info})")
@@ -1258,7 +1276,7 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     suggestions = {}
     
     # Fetch history cache untuk SEMUA tipe (termasuk tegangan)
-    print(f"  🧠 Menganalisis pola 14 hari ({day_label})...")
+    print(f"  🧠 Menganalisis pola {get_history_days()} hari ({day_label})...")
     cache = fetch_history_bulk(token, data_type, gi_id, date_str)
     
     if data_type != "tegangan-trafo":
