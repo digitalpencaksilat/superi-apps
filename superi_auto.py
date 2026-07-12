@@ -172,6 +172,118 @@ def fallback_tegangan_from_cache(cache, item_id):
 
 
 # ============================================================
+# AGREGASI BEBAN TRAFO DARI PENYULANG
+# ============================================================
+def _normalize_name(value):
+    return "".join(str(value or "").upper().split())
+
+
+def calculate_trafo_loads(penyulang_items, trafo_items, periode):
+    """Jumlahkan penyulang aktif per trafo; periode kosong bernilai 0 A."""
+    trafo_by_id = {str(x["id"]): x for x in trafo_items if x.get("id") is not None}
+    trafo_by_name = {_normalize_name(x.get("nama")): x for x in trafo_items if x.get("nama")}
+    calculations = {
+        str(x["id"]): {"trafo": x, "total": 0, "contributors": [], "fallbacks": []}
+        for x in trafo_items if x.get("id") is not None
+    }
+    unmapped = []
+    for feeder in penyulang_items:
+        if str(feeder.get("statusCB", "")).strip().upper() != "ON":
+            continue
+        relation = feeder.get("trafo") or {}
+        trafo = trafo_by_id.get(str(relation.get("id"))) if relation.get("id") is not None else None
+        if trafo is None:
+            trafo = trafo_by_name.get(_normalize_name(relation.get("nama")))
+        if trafo is None:
+            unmapped.append(feeder.get("nama", "?"))
+            continue
+        entries = [x for x in feeder.get("beban", []) if x.get("periode") == periode]
+        raw_value = entries[-1].get("beban") if entries else None
+        try:
+            value = float(raw_value) if raw_value is not None else 0
+        except (TypeError, ValueError):
+            value = 0
+        calc = calculations[str(trafo["id"])]
+        calc["total"] += value
+        calc["contributors"].append({"nama": feeder.get("nama", "?"), "value": value})
+        if not entries or raw_value is None:
+            calc["fallbacks"].append(feeder.get("nama", "?"))
+    for calc in calculations.values():
+        if isinstance(calc["total"], float) and calc["total"].is_integer():
+            calc["total"] = int(calc["total"])
+    return calculations, unmapped
+
+
+def auto_input_trafo_from_penyulang(token, gi_id, date_str, periode, dry_run=False, max_attempts=5, retry_delay=10):
+    """Input beban trafo dari akumulasi penyulang aktif yang tersimpan di SUPER-I."""
+    feeder_ep = a.ENDPOINTS["beban-penyulang"]
+    trafo_ep = a.ENDPOINTS["beban-trafo"]
+    params = {"garduIndukId": gi_id, "date": date_str}
+    max_attempts = max(1, int(max_attempts or 1))
+    retry_delay = max(1, int(retry_delay or 1))
+    feeders = a.api_get(token, feeder_ep["list"], params).get("data", {}).get("items", [])
+    trafos = a.api_get(token, trafo_ep["list"], params).get("data", {}).get("items", [])
+    if not feeders or not trafos:
+        log("  Data penyulang atau trafo tidak tersedia; kalkulasi dibatalkan", "ERROR")
+        return {"success": 0, "fail": len(trafos) or 1, "skipped": 0, "anomaly": 0, "items": []}
+    calculations, unmapped = calculate_trafo_loads(feeders, trafos, periode)
+    if unmapped:
+        log(f"  [UNMAPPED] Penyulang aktif tanpa relasi trafo: {', '.join(unmapped)}", "WARN")
+    existing = {str(x.get("id")) for x in trafos if any(e.get("periode") == periode for e in x.get("beban", []))}
+    targets = {key: calc for key, calc in calculations.items() if key not in existing}
+    if not targets:
+        log(f"  Beban Trafo P{periode:02d}: semua sudah terisi, skip")
+        return {"success": 0, "fail": 0, "skipped": len(trafos), "anomaly": 0, "items": []}
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+    item_logs = []
+    success = 0
+    for attempt in range(1, max_attempts + 1):
+        if attempt > 1:
+            log(f"  Retry Beban Trafo P{periode:02d} attempt {attempt}/{max_attempts}: {len(targets)} item belum terisi", "WARN")
+        for calc in targets.values():
+            trafo = calc["trafo"]
+            fallback = f", fallback 0A: {', '.join(calc['fallbacks'])}" if calc["fallbacks"] else ""
+            value_log = f"{calc['total']}Ampere ({len(calc['contributors'])} penyulang aktif{fallback})"
+            payload = {
+                "trafoId": trafo["id"], "timezone": "Asia/Jakarta", "periode": periode,
+                "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year, "durasi": 0.1,
+                "beban": calc["total"],
+                "foto": {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+            }
+            if dry_run:
+                log(f"  [DRY] {trafo.get('nama', '?')} P{periode:02d}: {value_log}")
+                item_logs.append({"nama": trafo.get("nama", "?"), "value": value_log, "ok": True})
+                continue
+            try:
+                _, resp = a.api_post_multipart(token, trafo_ep["input"], payload, a.DUMMY_JPEG, trafo_ep["file_field"], trafo_ep["num_photos"])
+                if resp.get("success"):
+                    log(f"  [OK] {trafo.get('nama', '?')} P{periode:02d}: {value_log}")
+                else:
+                    log(f"  [FAIL] {trafo.get('nama', '?')} P{periode:02d}: {resp.get('message', '?')}", "ERROR")
+            except Exception as exc:
+                log(f"  [FAIL] {trafo.get('nama', '?')} P{periode:02d}: {exc}", "ERROR")
+            time.sleep(0.1)
+        if dry_run:
+            success = len(targets)
+            targets = {}
+            break
+        refreshed = a.api_get(token, trafo_ep["list"], params).get("data", {}).get("items", [])
+        filled = {str(x.get("id")) for x in refreshed if any(e.get("periode") == periode for e in x.get("beban", []))}
+        remaining = {key: calc for key, calc in targets.items() if key not in filled}
+        success += len(targets) - len(remaining)
+        targets = remaining
+        if not targets:
+            log(f"  [VERIFY] Beban Trafo P{periode:02d}: semua hasil akumulasi sudah terisi")
+            break
+        if attempt < max_attempts:
+            log(f"  [RETRY] Beban Trafo P{periode:02d}: masih kosong {len(targets)} item, tunggu {retry_delay}s", "WARN")
+            time.sleep(retry_delay)
+    if targets:
+        log(f"  [GIVE UP] Beban Trafo P{periode:02d}: {len(targets)} hasil gagal disimpan", "ERROR")
+    return {"success": success, "fail": len(targets), "skipped": len(existing), "anomaly": 0, "items": item_logs}
+
+
+# ============================================================
 # AUTO INPUT (per tipe per jam)
 # ============================================================
 def auto_input_jam(token, data_type, gi_id, date_str, periode, dry_run=False, max_attempts=5, retry_delay=10):
@@ -374,6 +486,7 @@ def run_auto(force_jam=None, types=None, dry_run=False):
     # Tentukan tipe
     if types is None:
         types = cfg.get("auto_types", ["penyulang", "trafo", "tegangan"])
+    types = [t for t in ("penyulang", "trafo", "tegangan") if t in types]
     
     log("=" * 60)
     log(f"AUTO MODE: jam {jam:02d}:00, date {date_str}, types={','.join(types)}, dry_run={dry_run}")
@@ -404,11 +517,19 @@ def run_auto(force_jam=None, types=None, dry_run=False):
         if not full_type:
             continue
         log(f"\n→ {full_type.upper()}")
-        result = auto_input_jam(
-            token, full_type, gi_id, date_str, jam, dry_run=dry_run,
-            max_attempts=cfg.get("auto_retry_attempts", 5),
-            retry_delay=cfg.get("auto_retry_delay", 10),
-        )
+        input_func = auto_input_trafo_from_penyulang if t == "trafo" else auto_input_jam
+        if t == "trafo":
+            result = input_func(
+                token, gi_id, date_str, jam, dry_run=dry_run,
+                max_attempts=cfg.get("auto_retry_attempts", 5),
+                retry_delay=cfg.get("auto_retry_delay", 10),
+            )
+        else:
+            result = input_func(
+                token, full_type, gi_id, date_str, jam, dry_run=dry_run,
+                max_attempts=cfg.get("auto_retry_attempts", 5),
+                retry_delay=cfg.get("auto_retry_delay", 10),
+            )
         for k in total:
             total[k] += result[k]
         if result["success"] > 0:

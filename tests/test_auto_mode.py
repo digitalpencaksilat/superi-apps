@@ -77,6 +77,75 @@ class AutoModeRetryTests(unittest.TestCase):
         self.assertIn("deviasi", reason)
 
 
+class TrafoAggregationTests(unittest.TestCase):
+    def setUp(self):
+        self.orig_get = auto.a.api_get
+        self.orig_post = auto.a.api_post_multipart
+        self.orig_sleep = auto.time.sleep
+        auto.time.sleep = lambda *args, **kwargs: None
+
+    def tearDown(self):
+        auto.a.api_get = self.orig_get
+        auto.a.api_post_multipart = self.orig_post
+        auto.time.sleep = self.orig_sleep
+
+    def test_groups_active_feeders_and_uses_zero_fallback(self):
+        trafos = [{"id": 10, "nama": "TRAFO 1"}, {"id": 20, "nama": "TRAFO 2"}]
+        feeders = [
+            {"nama": "P1", "statusCB": "ON", "trafo": {"id": 10}, "beban": [{"periode": 8, "beban": 100}]},
+            {"nama": "P2", "statusCB": "ON", "trafo": {"nama": "TRAFO1"}, "beban": []},
+            {"nama": "P3", "statusCB": "OFF", "trafo": {"id": 10}, "beban": [{"periode": 8, "beban": 900}]},
+            {"nama": "P4", "statusCB": "ON", "trafo": {"id": 20}, "beban": [{"periode": 8, "beban": 50.5}]},
+            {"nama": "P5", "statusCB": "ON", "trafo": {}, "beban": [{"periode": 8, "beban": 25}]},
+        ]
+
+        calculations, unmapped = auto.calculate_trafo_loads(feeders, trafos, 8)
+
+        self.assertEqual(calculations["10"]["total"], 100)
+        self.assertEqual(calculations["10"]["fallbacks"], ["P2"])
+        self.assertEqual(calculations["20"]["total"], 50.5)
+        self.assertEqual(unmapped, ["P5"])
+
+    def test_posts_aggregated_value_and_verifies_storage(self):
+        state = {"posts": []}
+        feeders = [
+            {"nama": "P1", "statusCB": "ON", "trafo": {"id": 10}, "beban": [{"periode": 8, "beban": 125}]},
+            {"nama": "P2", "statusCB": "ON", "trafo": {"id": 10}, "beban": []},
+        ]
+        empty = [{"id": 10, "nama": "TRAFO 1", "beban": []}]
+        filled = [{"id": 10, "nama": "TRAFO 1", "beban": [{"periode": 8, "beban": 125}]}]
+
+        def fake_get(token, path, params):
+            if "beban-penyulang" in path:
+                return {"data": {"items": feeders}}
+            return {"data": {"items": filled if state["posts"] else empty}}
+
+        def fake_post(token, path, data, *args):
+            state["posts"].append(data)
+            return 200, {"success": True}
+
+        auto.a.api_get = fake_get
+        auto.a.api_post_multipart = fake_post
+
+        result = auto.auto_input_trafo_from_penyulang("token", 222, "2026-07-12", 8)
+
+        self.assertEqual(result["success"], 1)
+        self.assertEqual(result["fail"], 0)
+        self.assertEqual(state["posts"][0]["trafoId"], 10)
+        self.assertEqual(state["posts"][0]["beban"], 125)
+
+    def test_existing_trafo_period_is_not_overwritten(self):
+        feeders = [{"nama": "P1", "statusCB": "ON", "trafo": {"id": 10}, "beban": []}]
+        trafos = [{"id": 10, "nama": "TRAFO 1", "beban": [{"periode": 8, "beban": 90}]}]
+        auto.a.api_get = lambda token, path, params: {"data": {"items": feeders if "beban-penyulang" in path else trafos}}
+        auto.a.api_post_multipart = lambda *args, **kwargs: self.fail("existing value must not be overwritten")
+
+        result = auto.auto_input_trafo_from_penyulang("token", 222, "2026-07-12", 8)
+
+        self.assertEqual(result["success"], 0)
+        self.assertEqual(result["skipped"], 1)
+
+
 class WindowsLauncherStaticTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

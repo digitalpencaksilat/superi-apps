@@ -118,6 +118,22 @@ Contoh log sukses:
 [2026-06-19 23:05:20] [INFO]   Sync ke Portal APD selesai
 ```
 
+### Perhitungan Beban Trafo
+
+Saat tipe `penyulang` dan `trafo` aktif, urutan Auto Mode selalu:
+
+```text
+input dan retry penyulang → ambil ulang data SUPER-I → hitung trafo → tegangan
+```
+
+- Hanya penyulang dengan `statusCB` `ON` yang dijumlahkan.
+- Relasi penyulang ke trafo dibaca dari respons SUPER-I.
+- Penyulang aktif tanpa data pada periode tersebut dihitung sebagai `0 A` dan
+  dicatat sebagai fallback pada log.
+- Beban trafo yang sudah terisi tidak ditimpa.
+- Setelah input, data trafo diambil ulang untuk memastikan nilainya tersimpan;
+  kegagalan akan mengikuti konfigurasi retry Auto Mode.
+
 ## Matikan Auto
 
 ```bash

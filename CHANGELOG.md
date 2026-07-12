@@ -5,6 +5,32 @@ Semua perubahan penting pada project ini akan didokumentasikan di file ini.
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/),
 dan project ini menggunakan [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.1.1] — 2026-07-12
+
+### Added
+
+- Auto Mode menghitung beban trafo dari akumulasi beban penyulang aktif yang
+  sudah tersimpan di SUPER-I untuk periode yang sama.
+- Penyulang aktif yang tetap kosong setelah proses input dan retry menggunakan
+  fallback `0 A`, dengan nama penyulang dicatat pada log Auto Mode.
+- Pengujian regresi untuk pemetaan penyulang-trafo, status CB, fallback nol,
+  perlindungan data trafo yang sudah ada, dan verifikasi hasil penyimpanan.
+
+### Changed
+
+- Urutan proses Auto Mode dinormalisasi menjadi penyulang, trafo, lalu tegangan
+  agar kalkulasi trafo selalu membaca data penyulang terbaru dari SUPER-I.
+- Input otomatis beban trafo tidak lagi menggunakan smart-suggest historis.
+  Relasi trafo dibaca dari objek penyulang menggunakan ID, dengan nama
+  ternormalisasi sebagai fallback.
+
+### Fixed
+
+- Hasil input beban trafo kini diverifikasi dengan mengambil ulang data
+  SUPER-I dan di-retry jika belum tersimpan.
+- Penyulang berstatus CB `OFF` tidak ikut dijumlahkan dan beban trafo yang
+  sudah terisi tidak ditimpa.
+
 ## [1.1.0] — 2026-07-12
 
 ### Added
@@ -88,5 +114,6 @@ otomasi pekerjaan operator Gardu Induk 20kV.
 - Troubleshooting guide untuk error umum
 - Konfigurasi & deployment instructions
 
+[1.1.1]: https://github.com/digitalpencaksilat/superi-apps/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/digitalpencaksilat/superi-apps/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/digitalpencaksilat/superi-apps/releases/tag/v1.0.0
