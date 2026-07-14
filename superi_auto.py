@@ -52,8 +52,60 @@ sys.path.insert(0, SCRIPT_DIR)
 import superi_app as a
 import superi_sync as s
 
+try:
+    import superi_humanizer as hu
+except Exception:
+    hu = None
+
 CONFIG_FILE = os.path.join(SCRIPT_DIR, ".superi_config.json")
 LOG_FILE = os.path.join(SCRIPT_DIR, "auto_log.txt")
+
+
+def _h_durasi():
+    return hu.rand_durasi() if hu else 0.1
+
+
+def _h_foto_date(date_str, periode):
+    return hu.rand_foto_datetime(date_str, periode) if hu else f"{date_str}T{periode:02d}:00:00.000Z"
+
+
+def _h_foto_pair(date_str, periode):
+    if hu:
+        return hu.rand_foto_pair(date_str, periode)
+    ts = f"{date_str}T{periode:02d}:00:00.000Z"
+    return ts, ts
+
+
+def _h_sleep(a=0.6, b=2.2):
+    if hu:
+        hu.human_sleep(a, b)
+    else:
+        time.sleep(0.35)
+
+
+def _h_jittered(v, f=0.35):
+    return hu.jittered(v, f) if hu else v
+
+
+def _h_shuffled(seq):
+    return hu.shuffled(seq) if hu else list(seq)
+
+
+def _h_initial_jitter():
+    if hu and hu.rand_initial_jitter:
+        sec = hu.rand_initial_jitter(110)
+        log(f"Jitter awal {sec:.1f}s biar tidak seperti robot (cron anti-exact)", "INFO")
+        time.sleep(sec)
+
+
+def _get_jpeg_single():
+    return hu.rand_jpeg_bytes() if hu else a.DUMMY_JPEG
+
+
+def _get_jpeg_pair():
+    if hu:
+        return hu.rand_jpeg_pair()
+    return a.DUMMY_JPEG, a.DUMMY_JPEG
 
 # ============================================================
 # LOGGING
@@ -240,29 +292,30 @@ def auto_input_trafo_from_penyulang(token, gi_id, date_str, periode, dry_run=Fal
     for attempt in range(1, max_attempts + 1):
         if attempt > 1:
             log(f"  Retry Beban Trafo P{periode:02d} attempt {attempt}/{max_attempts}: {len(targets)} item belum terisi", "WARN")
-        for calc in targets.values():
+        calc_list = _h_shuffled(list(targets.values()))
+        for calc in calc_list:
             trafo = calc["trafo"]
             fallback = f", fallback 0A: {', '.join(calc['fallbacks'])}" if calc["fallbacks"] else ""
             value_log = f"{calc['total']}Ampere ({len(calc['contributors'])} penyulang aktif{fallback})"
             payload = {
                 "trafoId": trafo["id"], "timezone": "Asia/Jakarta", "periode": periode,
-                "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year, "durasi": 0.1,
+                "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year, "durasi": _h_durasi(),
                 "beban": calc["total"],
-                "foto": {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+                "foto": {"date": _h_foto_date(date_str, periode), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
             }
             if dry_run:
-                log(f"  [DRY] {trafo.get('nama', '?')} P{periode:02d}: {value_log}")
+                log(f"  [DRY] {trafo.get('nama', '?')} P{periode:02d}: {value_log} | foto={payload['foto']['date']} durasi={payload['durasi']}")
                 item_logs.append({"nama": trafo.get("nama", "?"), "value": value_log, "ok": True})
                 continue
             try:
-                _, resp = a.api_post_multipart(token, trafo_ep["input"], payload, a.DUMMY_JPEG, trafo_ep["file_field"], trafo_ep["num_photos"])
+                _, resp = a.api_post_multipart(token, trafo_ep["input"], payload, _get_jpeg_single(), trafo_ep["file_field"], trafo_ep["num_photos"])
                 if resp.get("success"):
                     log(f"  [OK] {trafo.get('nama', '?')} P{periode:02d}: {value_log}")
                 else:
                     log(f"  [FAIL] {trafo.get('nama', '?')} P{periode:02d}: {resp.get('message', '?')}", "ERROR")
             except Exception as exc:
                 log(f"  [FAIL] {trafo.get('nama', '?')} P{periode:02d}: {exc}", "ERROR")
-            time.sleep(0.1)
+            _h_sleep(1.0, 3.6)
         if dry_run:
             success = len(targets)
             targets = {}
@@ -276,8 +329,9 @@ def auto_input_trafo_from_penyulang(token, gi_id, date_str, periode, dry_run=Fal
             log(f"  [VERIFY] Beban Trafo P{periode:02d}: semua hasil akumulasi sudah terisi")
             break
         if attempt < max_attempts:
-            log(f"  [RETRY] Beban Trafo P{periode:02d}: masih kosong {len(targets)} item, tunggu {retry_delay}s", "WARN")
-            time.sleep(retry_delay)
+            jd = _h_jittered(float(retry_delay))
+            log(f"  [RETRY] Beban Trafo P{periode:02d}: masih kosong {len(targets)} item, tunggu {jd:.1f}s", "WARN")
+            time.sleep(jd)
     if targets:
         log(f"  [GIVE UP] Beban Trafo P{periode:02d}: {len(targets)} hasil gagal disimpan", "ERROR")
     return {"success": success, "fail": len(targets), "skipped": len(existing), "anomaly": 0, "items": item_logs}
@@ -335,7 +389,9 @@ def auto_input_jam(token, data_type, gi_id, date_str, periode, dry_run=False, ma
         attempt_fail = 0
         attempt_anomaly = 0
 
-        for it in targets:
+        attempt_targets = _h_shuffled(targets)
+
+        for it in attempt_targets:
             nama = it["nama"]
             item_id = it["id"]
 
@@ -365,15 +421,16 @@ def auto_input_jam(token, data_type, gi_id, date_str, periode, dry_run=False, ma
                     attempt_anomaly += 1
 
                 value_log = f"MV={mv} HV={hv}"
+                ts1, ts2 = _h_foto_pair(date_str, periode)
                 data_dict = {
                     ep["id_field"]: item_id,
                     "timezone": "Asia/Jakarta",
                     "periode": periode,
                     "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year,
-                    "durasi": 0.1,
+                    "durasi": _h_durasi(),
                     ep["value_field"]: mv, "hv": hv,
-                    "fotoHV": {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
-                    "fotoMV": {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+                    "fotoHV": {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+                    "fotoMV": {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
                 }
             else:
                 val, info = a.smart_suggest_from_cache(cache, item_id, periode, is_weekend)
@@ -404,20 +461,20 @@ def auto_input_jam(token, data_type, gi_id, date_str, periode, dry_run=False, ma
                     "timezone": "Asia/Jakarta",
                     "periode": periode,
                     "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year,
-                    "durasi": 0.1,
+                    "durasi": _h_durasi(),
                     ep["value_field"]: val,
-                    "foto": {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+                    "foto": {"date": _h_foto_date(date_str, periode), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
                 }
 
             if dry_run:
-                log(f"  [DRY] {nama} P{periode:02d}: {value_log}")
+                fd = data_dict.get("foto", {}).get("date") or data_dict.get("fotoHV", {}).get("date")
+                log(f"  [DRY] {nama} P{periode:02d}: {value_log} | foto={fd} durasi={data_dict['durasi']}")
                 success += 1
                 item_logs.append({"nama": nama, "value": value_log, "ok": True})
                 continue
 
-            # Submit
             try:
-                status, resp = a.api_post_multipart(token, ep["input"], data_dict, a.DUMMY_JPEG, ep["file_field"], ep["num_photos"])
+                status, resp = a.api_post_multipart(token, ep["input"], data_dict, _get_jpeg_single(), ep["file_field"], ep["num_photos"])
                 if resp.get("success"):
                     log(f"  [OK] {nama} P{periode:02d}: {value_log}")
                     item_logs.append({"nama": nama, "value": value_log, "ok": True})
@@ -430,14 +487,13 @@ def auto_input_jam(token, data_type, gi_id, date_str, periode, dry_run=False, ma
                 log(f"  [FAIL] {nama} P{periode:02d}: {e}", "ERROR")
                 attempt_fail += 1
 
-            time.sleep(0.1)  # rate limit
+            _h_sleep(1.0, 3.8)
 
         if dry_run:
             fail += attempt_fail
             anomaly += attempt_anomaly
             break
 
-        # Guard utama: fetch ulang, baru anggap sukses kalau benar-benar sudah terisi di SUPER-I.
         items, remaining = missing_targets()
         filled_now = len(targets) - len(remaining)
         success += max(0, filled_now)
@@ -447,8 +503,9 @@ def auto_input_jam(token, data_type, gi_id, date_str, periode, dry_run=False, ma
 
         targets = remaining
         if attempt < max_attempts:
-            log(f"  [RETRY] {ep['label']} P{periode:02d}: masih kosong {len(targets)} item, tunggu {retry_delay}s", "WARN")
-            time.sleep(retry_delay)
+            jd = _h_jittered(float(retry_delay))
+            log(f"  [RETRY] {ep['label']} P{periode:02d}: masih kosong {len(targets)} item, tunggu {jd:.1f}s", "WARN")
+            time.sleep(jd)
         else:
             fail += len(targets)
             anomaly += attempt_anomaly
@@ -474,9 +531,9 @@ def run_auto(force_jam=None, types=None, dry_run=False):
     now = datetime.now()
     jam = force_jam if force_jam is not None else now.hour
     date_str = now.strftime("%Y-%m-%d")
-    
-    # Cek window
+
     if force_jam is None:
+        _h_initial_jitter()
         win_start = cfg.get("auto_window_start", 22)
         win_end = cfg.get("auto_window_end", 5)
         if not in_window(jam, win_start, win_end):
@@ -554,7 +611,7 @@ def run_auto(force_jam=None, types=None, dry_run=False):
                     except Exception as e:
                         log(f"  Sync {t} gagal attempt {attempt}/3: {e}", "ERROR")
                     if attempt < 3:
-                        time.sleep(10)
+                        time.sleep(_h_jittered(10.0))
                 if not sync_ok:
                     log(f"  Sync {t} gagal final setelah 3 attempt", "ERROR")
         else:

@@ -44,7 +44,52 @@ API_BASE = f"{BASE_URL}/api"
 AUTH_URL = f"{API_BASE}/auth/login-mobile"
 BOUNDARY = "----FormBoundary7MA4YWxkTrZu0gW"
 
-# 1x1 pixel JPEG minimal
+try:
+    import superi_humanizer as hu
+except Exception:
+    hu = None
+
+
+def _h_durasi():
+    return hu.rand_durasi() if hu else 0.1
+
+
+def _h_foto_date(date_str, periode):
+    if hu:
+        return hu.rand_foto_datetime(date_str, periode)
+    return f"{date_str}T{periode:02d}:00:00.000Z"
+
+
+def _h_foto_pair(date_str, periode):
+    if hu:
+        return hu.rand_foto_pair(date_str, periode)
+    ts = f"{date_str}T{periode:02d}:00:00.000Z"
+    return ts, ts
+
+
+def _h_boundary():
+    return hu.rand_boundary() if hu else BOUNDARY
+
+
+def _h_filename(foto_ts, idx=0):
+    return hu.rand_filename(foto_ts, idx=idx) if hu else f"foto{idx + 1}.jpg"
+
+
+def _h_user_agent():
+    return hu.rand_user_agent() if hu else "okhttp/4.12.0"
+
+
+def _get_jpeg_bytes(single=True):
+    if hu:
+        if single:
+            return hu.rand_jpeg_bytes()
+        else:
+            a, b = hu.rand_jpeg_pair()
+            return a, b
+    return DUMMY_JPEG if single else (DUMMY_JPEG, DUMMY_JPEG)
+
+
+# 1x1 pixel JPEG minimal (fallback legacy, real now from hu.rand_jpeg_bytes)
 DUMMY_JPEG = bytes([
     0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
     0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,
@@ -171,19 +216,21 @@ def api_request(method, path, token, body=None, params=None):
 
 
 def build_multipart(data_dict: dict, file_bytes: bytes = None) -> bytes:
-    """Build multipart/form-data body dengan field 'data' (JSON) + 'file' (foto)."""
+    bd = _h_boundary()
     data_json = json.dumps(data_dict)
+    foto_ts = data_dict.get("foto", {}).get("date") or data_dict.get("fotoHV", {}).get("date")
+    fname = _h_filename(foto_ts, idx=0)
     parts = [
-        f'--{BOUNDARY}\r\nContent-Disposition: form-data; name="data"\r\n\r\n{data_json}\r\n'.encode(),
+        f'--{bd}\r\nContent-Disposition: form-data; name="data"\r\n\r\n{data_json}\r\n'.encode(),
     ]
     if file_bytes:
         parts.append(
-            f'--{BOUNDARY}\r\nContent-Disposition: form-data; name="file"; filename="foto.jpg"\r\nContent-Type: image/jpeg\r\n\r\n'.encode()
+            f'--{bd}\r\nContent-Disposition: form-data; name="file"; filename="{fname}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode()
         )
         parts.append(file_bytes)
-        parts.append(f'\r\n--{BOUNDARY}--\r\n'.encode())
+        parts.append(f'\r\n--{bd}--\r\n'.encode())
     else:
-        parts.append(f'--{BOUNDARY}--\r\n'.encode())
+        parts.append(f'--{bd}--\r\n'.encode())
     return b''.join(parts)
 
 
@@ -206,7 +253,10 @@ def submit_beban(token: str, data_type: str, gi_id: int, item_id: int,
     if file_bytes is None:
         file_bytes = DUMMY_JPEG
     
-    # Build inner data JSON
+    date_str_full = f"{dt.year}-{dt.month:02d}-{dt.day:02d}"
+    ts_beban = _h_foto_date(date_str_full, periode)
+    ts1, ts2 = _h_foto_pair(date_str_full, periode)
+
     data_dict = {
         ep["id_field"]: item_id,
         "timezone": tz,
@@ -214,55 +264,67 @@ def submit_beban(token: str, data_type: str, gi_id: int, item_id: int,
         "tanggal": dt.day,
         "bulan": dt.month - 1,
         "tahun": dt.year,
-        "durasi": 0.1,
+        "durasi": _h_durasi(),
         ep["value_field"]: value,
         "foto": {
-            "date": f"{dt.year}-{dt.month:02d}-{dt.day:02d}T{periode:02d}:00:00.000Z",
+            "date": ts_beban,
             "address": "GI MANGGARAI",
             "latitude": -6.213,
             "longitude": 106.846,
         }
     }
-    
-    # Tegangan: add hv and use fotoHV/fotoMV (2 foto objects, bukan 1 "foto")
+
     if data_type == "tegangan-trafo":
         data_dict["hv"] = value_2 or 150
         del data_dict["foto"]
         data_dict["fotoHV"] = {
-            "date": f"{dt.year}-{dt.month:02d}-{dt.day:02d}T{periode:02d}:00:00.000Z",
+            "date": ts1,
             "address": "GI MANGGARAI",
             "latitude": -6.213,
             "longitude": 106.846,
         }
         data_dict["fotoMV"] = {
-            "date": f"{dt.year}-{dt.month:02d}-{dt.day:02d}T{periode:02d}:00:00.000Z",
+            "date": ts2,
             "address": "GI MANGGARAI",
             "latitude": -6.213,
             "longitude": 106.846,
         }
-    
-    # Build multipart body
-    file_field = ep.get("file_field", "file")  # tegangan="files", beban="file"
+
+    file_field = ep.get("file_field", "file")
     inner = json.dumps(data_dict)
-    body_parts = [
-        f'--{BOUNDARY}\r\nContent-Disposition: form-data; name="data"\r\n\r\n{inner}\r\n'.encode(),
-    ]
-    # Tegangan: 2 foto dgn nama field sama ("files")
-    if data_type == "tegangan-trafo":
-        body_parts.append(f'--{BOUNDARY}\r\nContent-Disposition: form-data; name="{file_field}"; filename="hv.jpg"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
-        body_parts.append(file_bytes)
-        body_parts.append(f'\r\n--{BOUNDARY}\r\nContent-Disposition: form-data; name="{file_field}"; filename="mv.jpg"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
-        body_parts.append(file_bytes)
-        body_parts.append(f'\r\n--{BOUNDARY}--\r\n'.encode())
+    bd = _h_boundary()
+
+    if hu:
+        if data_type == "tegangan-trafo":
+            jb1, jb2 = hu.rand_jpeg_pair()
+            jpeg_pool = [jb1, jb2]
+        else:
+            jpeg_pool = [hu.rand_jpeg_bytes()]
     else:
-        body_parts.append(f'--{BOUNDARY}\r\nContent-Disposition: form-data; name="{file_field}"; filename="foto.jpg"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
-        body_parts.append(file_bytes)
-        body_parts.append(f'\r\n--{BOUNDARY}--\r\n'.encode())
-    
+        jpeg_pool = [file_bytes]
+
+    body_parts = [
+        f'--{bd}\r\nContent-Disposition: form-data; name="data"\r\n\r\n{inner}\r\n'.encode(),
+    ]
+    if data_type == "tegangan-trafo":
+        fn1 = _h_filename(ts1, idx=0)
+        fn2 = _h_filename(ts2, idx=1)
+        body_parts.append(f'--{bd}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fn1}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
+        body_parts.append(jpeg_pool[0])
+        body_parts.append(f'\r\n--{bd}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fn2}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
+        body_parts.append(jpeg_pool[1])
+        body_parts.append(f'\r\n--{bd}--\r\n'.encode())
+    else:
+        fn = _h_filename(ts_beban, idx=0)
+        body_parts.append(f'--{bd}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fn}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
+        body_parts.append(jpeg_pool[0])
+        body_parts.append(f'\r\n--{bd}--\r\n'.encode())
+
     body = b''.join(body_parts)
-    
+
     req = urllib.request.Request(f"{API_BASE}{ep['input']}", data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={BOUNDARY}", "Authorization": f"Bearer {token}"},
+        headers={"Content-Type": f"multipart/form-data; boundary={bd}", "Authorization": f"Bearer {token}",
+                 "Accept": "application/json", "User-Agent": _h_user_agent()},
         method="POST")
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:

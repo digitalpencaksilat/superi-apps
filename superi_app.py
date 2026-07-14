@@ -32,8 +32,58 @@ if SCRIPT_DIR not in sys.path:
 
 try:
     import cli_render as ui
-except Exception:  # pragma: no cover - fallback if module missing
+except Exception:
     ui = None
+
+try:
+    import superi_humanizer as hu
+except Exception:
+    hu = None
+
+
+def _human_foto_date(date_str, periode):
+    if hu:
+        return hu.rand_foto_datetime(date_str, periode)
+    return f"{date_str}T{periode:02d}:00:00.000Z"
+
+
+def _human_foto_pair(date_str, periode):
+    if hu:
+        return hu.rand_foto_pair(date_str, periode)
+    ts = f"{date_str}T{periode:02d}:00:00.000Z"
+    return ts, ts
+
+
+def _human_durasi():
+    if hu:
+        return hu.rand_durasi()
+    return 0.1
+
+
+def _human_sleep(a=0.6, b=2.2):
+    if hu:
+        hu.human_sleep(a, b)
+    else:
+        import time
+        time.sleep(0.35)
+
+
+def _human_shuffled(seq):
+    if hu:
+        return hu.shuffled(seq)
+    return list(seq)
+
+
+def _get_jpeg_bytes(single=True):
+    """Return JPEG bytes humanized: random size 30-150KB, hash berbeda tiap call.
+    single=True -> 1 foto, single=False -> (jpeg1, jpeg2) untuk tegangan.
+    """
+    if hu:
+        if single:
+            return hu.rand_jpeg_bytes()
+        else:
+            return hu.rand_jpeg_pair()
+    return DUMMY_JPEG, DUMMY_JPEG
 
 
 def _enable_win_vt100():
@@ -160,23 +210,61 @@ def api_delete(token, path):
 def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photos):
     url = f"{API_BASE}{path}"
     inner = json.dumps(data_dict)
-    body_parts = [f'--{BOUNDARY}\r\nContent-Disposition: form-data; name="data"\r\n\r\n{inner}\r\n'.encode()]
+
+    bd = hu.rand_boundary() if hu else BOUNDARY
+    foto_ts_for_name = None
+    if data_dict.get("foto", {}).get("date"):
+        foto_ts_for_name = data_dict["foto"]["date"]
+    elif data_dict.get("fotoHV", {}).get("date"):
+        foto_ts_for_name = data_dict["fotoHV"]["date"]
+
+    if hu:
+        if num_photos > 1:
+            jb1, jb2 = hu.rand_jpeg_pair()
+            jpeg_pool = [jb1, jb2]
+        else:
+            jpeg_pool = [hu.rand_jpeg_bytes()]
+    else:
+        jpeg_pool = [file_bytes]
+
+    body_parts = [f'--{bd}\r\nContent-Disposition: form-data; name="data"\r\n\r\n{inner}\r\n'.encode()]
+
     for i in range(num_photos):
-        name = f"foto{i+1}.jpg" if num_photos > 1 else "foto.jpg"
-        body_parts.append(f'--{BOUNDARY}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{name}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
-        body_parts.append(file_bytes if isinstance(file_bytes, bytes) else file_bytes)
+        if hu:
+            if num_photos > 1 and i == 1 and "fotoMV" in data_dict:
+                fn_ts = data_dict.get("fotoMV", {}).get("date") or foto_ts_for_name
+            elif num_photos > 1 and i == 0:
+                fn_ts = data_dict.get("fotoHV", {}).get("date") or foto_ts_for_name
+            else:
+                fn_ts = foto_ts_for_name
+            fname = hu.rand_filename(fn_ts, idx=i)
+            fbytes = jpeg_pool[i % len(jpeg_pool)]
+        else:
+            fname = f"foto{i+1}.jpg" if num_photos > 1 else "foto.jpg"
+            fbytes = file_bytes if isinstance(file_bytes, bytes) else file_bytes
+
+        body_parts.append(f'--{bd}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fname}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
+        body_parts.append(fbytes if isinstance(fbytes, bytes) else fbytes)
         body_parts.append(b'\r\n')
-    body_parts.append(f'--{BOUNDARY}--\r\n'.encode())
+    body_parts.append(f'--{bd}--\r\n'.encode())
     body = b''.join(body_parts)
-    
-    req = urllib.request.Request(url, data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={BOUNDARY}", "Authorization": f"Bearer {token}"},
-        method="POST")
+
+    hdrs = {
+        "Content-Type": f"multipart/form-data; boundary={bd}",
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "User-Agent": hu.rand_user_agent() if hu else "okhttp/4.12.0",
+    }
+
+    req = urllib.request.Request(url, data=body, headers=hdrs, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             return resp.status, json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read())
+        try:
+            return e.code, json.loads(e.read())
+        except Exception:
+            return e.code, {"message": str(e)}
 
 # ============================================================
 # MENU SYSTEM
@@ -825,7 +913,6 @@ def input_single(token, data_type, gi_id, date_str, user_info):
         input(f"  {C['D']}[Enter]{C['R']}")
         return
     
-    # Build data
     dt = datetime.strptime(date_str, "%Y-%m-%d")
     data_dict = {
         ep["id_field"]: item_id,
@@ -834,16 +921,17 @@ def input_single(token, data_type, gi_id, date_str, user_info):
         "tanggal": dt.day,
         "bulan": dt.month - 1,
         "tahun": dt.year,
-        "durasi": 0.1,
+        "durasi": _human_durasi(),
         ep["value_field"]: value,
     }
-    
+
     if data_type == "tegangan-trafo":
+        ts1, ts2 = _human_foto_pair(date_str, per)
         data_dict["hv"] = extra_values.get("hv", 150)
-        data_dict["fotoHV"] = {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-        data_dict["fotoMV"] = {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        data_dict["fotoHV"] = {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        data_dict["fotoMV"] = {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
     else:
-        data_dict["foto"] = {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        data_dict["foto"] = {"date": _human_foto_date(date_str, per), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
     
     print("\n  Mengirim...")
     status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
@@ -1104,6 +1192,7 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
         total = len(valid_periods)
         for i, per in enumerate(valid_periods, 1):
             mv, hv, _ = teg_suggestions[per]
+            ts1, ts2 = _human_foto_pair(date_str, per)
             data_dict = {
                 ep["id_field"]: item["id"],
                 "timezone": "Asia/Jakarta",
@@ -1111,11 +1200,11 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
                 "tanggal": dt.day,
                 "bulan": dt.month - 1,
                 "tahun": dt.year,
-                "durasi": 0.1,
+                "durasi": _human_durasi(),
                 ep["value_field"]: mv,
                 "hv": hv,
-                "fotoHV": {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
-                "fotoMV": {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+                "fotoHV": {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+                "fotoMV": {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
             }
             status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
             ok = result.get("success")
@@ -1127,6 +1216,8 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
                 success += 1
             else:
                 fail += 1
+            if i < total:
+                _human_sleep(0.8, 3.2)
         if ui:
             sys.stdout.write("\n")
         print()
@@ -1172,9 +1263,9 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
             "tanggal": dt.day,
             "bulan": dt.month - 1,
             "tahun": dt.year,
-            "durasi": 0.1,
+            "durasi": _human_durasi(),
             ep["value_field"]: value,
-            "foto": {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+            "foto": {"date": _human_foto_date(date_str, per), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
         }
         status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
         ok = result.get("success")
@@ -1186,6 +1277,8 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
             success += 1
         else:
             fail += 1
+        if i < total:
+            _human_sleep(0.8, 3.2)
     if ui:
         sys.stdout.write("\n")
     print()
@@ -1364,7 +1457,8 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     total = len(valid_items)
     failures = []  # (nama, reason)
 
-    for i, it in enumerate(valid_items, 1):
+    shuffled_items = _human_shuffled(valid_items)
+    for i, it in enumerate(shuffled_items, 1):
         s = suggestions[it["id"]]
         data_dict = {
             ep["id_field"]: it["id"],
@@ -1373,19 +1467,20 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
             "tanggal": dt.day,
             "bulan": dt.month - 1,
             "tahun": dt.year,
-            "durasi": 0.1,
+            "durasi": _human_durasi(),
         }
         if data_type == "tegangan-trafo":
             mv_val, hv_val = s
+            ts1, ts2 = _human_foto_pair(date_str, per)
             data_dict[ep["value_field"]] = mv_val
             data_dict["hv"] = hv_val
-            data_dict["fotoHV"] = {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-            data_dict["fotoMV"] = {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+            data_dict["fotoHV"] = {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+            data_dict["fotoMV"] = {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
             detail = f"MV={mv_val} HV={hv_val}"
         else:
             value = s[0]
             data_dict[ep["value_field"]] = value
-            data_dict["foto"] = {"date": f"{date_str}T{per:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+            data_dict["foto"] = {"date": _human_foto_date(date_str, per), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
             detail = f"{value}A"
 
         try:
@@ -1407,10 +1502,11 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
             success += 1
         else:
             fail += 1
+        if i < total:
+            _human_sleep(0.8, 3.2)
     if ui:
         sys.stdout.write("\n")
 
-    # Detail failures (di baris sendiri agar tidak tertimpa \r)
     for nama, reason in failures:
         print(f"  {C['RE']}✗ {nama}: {reason}{C['R']}")
 

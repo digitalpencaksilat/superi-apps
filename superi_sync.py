@@ -30,7 +30,23 @@ __version__ = "1.1.1"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-import cli_render  # shared pure-string render helpers (fmt_progress_bar, render_sync_summary, …)
+import cli_render
+
+try:
+    import superi_humanizer as hu
+except Exception:
+    hu = None
+
+
+def _h_sleep(a=0.4, b=1.9):
+    if hu:
+        hu.human_sleep(a, b)
+    else:
+        time.sleep(0.55)
+
+
+def _h_shuffled(seq):
+    return hu.shuffled(seq) if hu else list(seq)
 
 # ============ CONFIG LOADER ============
 # Credentials & config dibaca dari .superi_config.json (gitignored).
@@ -293,7 +309,7 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
 
     grid_normalized = {_normalize(k): (k, v) for k, v in grid.items()}
 
-    for name, values in superi_data.items():
+    for name, values in _h_shuffled(list(superi_data.items())):
         # Try exact match first, then normalized
         rowdata = None
         if name in grid:
@@ -330,14 +346,13 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                             updates += 1
                         else:
                             errors += 1; error_list.append(f"{name} {col}(MV)={mv_vals[h]}")
-                        time.sleep(0.05)
+                        _h_sleep(0.5, 1.9)
                 else:
                     skipped += 1
                 done += 1
                 if not dry_run:
                     live_progress(done, total_cells, name)
 
-                # HV → k column
                 if h < len(hv_vals) and hv_vals[h] is not None:
                     col = f"k{h:02d}"
                     existing = rowdata.get(col)
@@ -352,7 +367,7 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                             updates += 1
                         else:
                             errors += 1; error_list.append(f"{name} {col}(HV)={hv_vals[h]}")
-                        time.sleep(0.05)
+                        _h_sleep(0.5, 1.9)
                 else:
                     skipped += 1
                 done += 1
@@ -380,7 +395,7 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                         updates += 1
                     else:
                         errors += 1; error_list.append(f"{name} {col}={jams[h]}")
-                    time.sleep(0.05)
+                    _h_sleep(0.5, 1.9)
                 done += 1
                 if not dry_run:
                     live_progress(done, total_cells, name)

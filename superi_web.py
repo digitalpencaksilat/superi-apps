@@ -20,7 +20,40 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-import superi_app as _cli  # shared config helper (get_history_days, etc.)
+import superi_app as _cli
+
+try:
+    import superi_humanizer as hu
+except Exception:
+    hu = None
+
+
+def _h_durasi():
+    return hu.rand_durasi() if hu else 0.1
+
+
+def _h_foto_date(date_str, periode):
+    return hu.rand_foto_datetime(date_str, periode) if hu else f"{date_str}T{periode:02d}:00:00.000Z"
+
+
+def _h_foto_pair(date_str, periode):
+    if hu:
+        return hu.rand_foto_pair(date_str, periode)
+    ts = f"{date_str}T{periode:02d}:00:00.000Z"
+    return ts, ts
+
+
+def _h_boundary():
+    return hu.rand_boundary() if hu else BOUNDARY
+
+
+def _h_filename(foto_ts, idx=0):
+    return hu.rand_filename(foto_ts, idx=idx) if hu else f"foto{idx + 1}.jpg"
+
+
+def _h_user_agent():
+    return hu.rand_user_agent() if hu else "okhttp/4.12.0"
+
 
 app = Flask(__name__)
 app.secret_key = os.urandom(32)
@@ -296,26 +329,53 @@ def learn_pattern(token, gi_id, data_type, item_id, days_back=None):
     return result
 
 def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photos):
-    """POST multipart request."""
+    """POST multipart request with humanized filename/boundary/UA and varying JPEG bytes."""
     try:
         url = f"{API_BASE}{path}"
         inner = json.dumps(data_dict)
-        body_parts = [f'--{BOUNDARY}\r\nContent-Disposition: form-data; name="data"\r\n\r\n{inner}\r\n'.encode()]
+        bd = _h_boundary()
+        foto_ts = data_dict.get("foto", {}).get("date") or data_dict.get("fotoHV", {}).get("date")
+
+        if hu:
+            if num_photos > 1:
+                jb1, jb2 = hu.rand_jpeg_pair()
+                jpeg_pool = [jb1, jb2]
+            else:
+                jpeg_pool = [hu.rand_jpeg_bytes()]
+        else:
+            jpeg_pool = [file_bytes]
+
+        body_parts = [f'--{bd}\r\nContent-Disposition: form-data; name="data"\r\n\r\n{inner}\r\n'.encode()]
         for i in range(num_photos):
-            name = f"foto{i+1}.jpg" if num_photos > 1 else "foto.jpg"
-            body_parts.append(f'--{BOUNDARY}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{name}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
-            body_parts.append(file_bytes if isinstance(file_bytes, bytes) else file_bytes)
+            if i == 1 and data_dict.get("fotoMV", {}).get("date"):
+                fn_ts = data_dict["fotoMV"]["date"]
+            elif i == 0 and data_dict.get("fotoHV", {}).get("date"):
+                fn_ts = data_dict["fotoHV"]["date"]
+            else:
+                fn_ts = foto_ts
+            fname = _h_filename(fn_ts, idx=i)
+            fbytes = jpeg_pool[i % len(jpeg_pool)] if hu else file_bytes
+            body_parts.append(f'--{bd}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fname}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
+            body_parts.append(fbytes if isinstance(fbytes, bytes) else file_bytes)
             body_parts.append(b'\r\n')
-        body_parts.append(f'--{BOUNDARY}--\r\n'.encode())
+        body_parts.append(f'--{bd}--\r\n'.encode())
         body = b''.join(body_parts)
-        
+
         req = urllib.request.Request(url, data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={BOUNDARY}", "Authorization": f"Bearer {token}"},
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={bd}",
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+                "User-Agent": _h_user_agent(),
+            },
             method="POST")
         with urllib.request.urlopen(req, timeout=60) as resp:
             return resp.status, json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read())
+        try:
+            return e.code, json.loads(e.read())
+        except Exception:
+            return e.code, {"message": str(e)}
     except Exception as e:
         return 500, {"error": str(e)}
 
@@ -445,16 +505,17 @@ def api_input():
         "tanggal": dt.day,
         "bulan": dt.month - 1,
         "tahun": dt.year,
-        "durasi": 0.1,
+        "durasi": _h_durasi(),
         value_field: mv if data_type == "tegangan-trafo" else value,
     }
-    
+
     if data_type == "tegangan-trafo":
+        ts1, ts2 = _h_foto_pair(date_str, periode)
         body_data["hv"] = hv
-        body_data["fotoHV"] = {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-        body_data["fotoMV"] = {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        body_data["fotoHV"] = {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        body_data["fotoMV"] = {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
     else:
-        body_data["foto"] = {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        body_data["foto"] = {"date": _h_foto_date(date_str, periode), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
     
     status, result = api_post_multipart(token, endpoint, body_data, DUMMY_JPEG, file_field, num_photos)
     
@@ -573,35 +634,35 @@ def api_batch_input():
                 "tanggal": dt.day,
                 "bulan": dt.month - 1,
                 "tahun": dt.year,
-                "durasi": 0.1,
+                "durasi": _h_durasi(),
             }
-            
+
             if data_type == "tegangan-trafo":
+                ts1, ts2 = _h_foto_pair(date_str, periode)
                 body_data["mv"] = it.get("mv")
                 body_data["hv"] = it.get("hv")
-                body_data["fotoHV"] = {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-                body_data["fotoMV"] = {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+                body_data["fotoHV"] = {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+                body_data["fotoMV"] = {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
             else:
                 body_data["beban"] = it.get("value")
-                body_data["foto"] = {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-            
+                body_data["foto"] = {"date": _h_foto_date(date_str, periode), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+
             status, result = api_post_multipart(token, endpoint, body_data, DUMMY_JPEG, file_field, num_photos)
             if result.get("success"):
                 results.append({"item_id": item_id, "success": True, "id": result["data"].get("id")})
             else:
                 results.append({"item_id": item_id, "success": False, "message": result.get("message")})
-    
+
     else:
-        # Batch per item: 1 item, banyak periode sekaligus
         item_id = data.get("item_id")
-        periods = data.get("periods")  # list of {periode, value, mv, hv}
-        
+        periods = data.get("periods")
+
         if not periods or not isinstance(periods, list):
             return jsonify({"success": False, "message": "Periods harus list"}), 400
-        
+
         for p in periods:
             periodo = p.get("periode")
-            
+
             if data_type == "tegangan-trafo":
                 endpoint = "/gama/opgi-20kv/operator-gi/tegangan-trafo/input"
                 file_field = "files"
@@ -617,12 +678,12 @@ def api_batch_input():
                 file_field = "file"
                 num_photos = 1
                 id_field = "penyulangId"
-            
+
             if dry_run:
                 val_label = f"MV={p.get('mv')} HV={p.get('hv')}" if data_type == "tegangan-trafo" else f"{p.get('value')}A"
                 results.append({"periode": periodo, "success": True, "dry_run": True, "value": val_label})
                 continue
-            
+
             dt = datetime.strptime(date_str, "%Y-%m-%d")
             body_data = {
                 id_field: item_id,
@@ -631,24 +692,25 @@ def api_batch_input():
                 "tanggal": dt.day,
                 "bulan": dt.month - 1,
                 "tahun": dt.year,
-                "durasi": 0.1,
+                "durasi": _h_durasi(),
             }
-            
+
             if data_type == "tegangan-trafo":
+                ts1, ts2 = _h_foto_pair(date_str, periodo)
                 body_data["mv"] = p.get("mv")
                 body_data["hv"] = p.get("hv")
-                body_data["fotoHV"] = {"date": f"{date_str}T{periodo:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-                body_data["fotoMV"] = {"date": f"{date_str}T{periodo:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+                body_data["fotoHV"] = {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+                body_data["fotoMV"] = {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
             else:
                 body_data["beban"] = p.get("value")
-                body_data["foto"] = {"date": f"{date_str}T{periodo:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-            
+                body_data["foto"] = {"date": _h_foto_date(date_str, periodo), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+
             status, result = api_post_multipart(token, endpoint, body_data, DUMMY_JPEG, file_field, num_photos)
             if result.get("success"):
                 results.append({"periode": periodo, "success": True, "id": result["data"].get("id")})
             else:
                 results.append({"periode": periodo, "success": False, "message": result.get("message")})
-    
+
     return jsonify({"success": True, "results": results, "dry_run": dry_run})
 
 @app.route("/api/data/smart-suggest", methods=["GET"])
@@ -1590,15 +1652,16 @@ def api_scripting_input():
         "timezone": "Asia/Jakarta",
         "periode": periode,
         "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year,
-        "durasi": 0.1,
+        "durasi": _h_durasi(),
         ep[4]: data.get("value") if data_type != "tegangan-trafo" else data.get("mv"),
     }
     if data_type == "tegangan-trafo":
+        ts1, ts2 = _h_foto_pair(date_str, periode)
         body_data["hv"] = data.get("hv")
-        body_data["fotoHV"] = {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-        body_data["fotoMV"] = {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        body_data["fotoHV"] = {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        body_data["fotoMV"] = {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
     else:
-        body_data["foto"] = {"date": f"{date_str}T{periode:02d}:00:00.000Z", "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        body_data["foto"] = {"date": _h_foto_date(date_str, periode), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
 
     status, result = api_post_multipart(token, ep[0], body_data, DUMMY_JPEG, ep[1], ep[2])
     if result.get("success"):
