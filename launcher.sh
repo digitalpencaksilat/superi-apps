@@ -53,6 +53,13 @@ elif [ "$1" == "auto" ] || [ "$1" == "a" ]; then
     shift
     $PYTHON superi_auto.py "$@"
 
+elif [ "$1" == "logout" ] || [ "$1" == "lo" ]; then
+    cd "$SUPERI_DIR"
+    shift
+    echo "🚪 Logout akun SUPER-I..."
+    echo "   Auto mode & cron akan OTOMATIS NONAKTIF"
+    $PYTHON superi_app.py --logout "$@"
+
 else
     echo "SUPER-I APP Launcher"
     echo "===================="
@@ -64,10 +71,16 @@ else
     echo "  cli, c           Jalankan CLI interaktif"
     echo "  input, i [opts]  Jalankan CLI scripting (input ke SUPER-I)"
     echo "  sync, s [opts]   Sync ke Portal APD (no-args = buka CLI; --type/--jam = non-interactive)"
+    echo "  logout, lo       Logout akun (hapus kredensial + auto OFF + hapus cron otomatis)"
+    echo "    --yes          Skip konfirmasi"
+    echo "    --purge-all    Hapus file config total"
+    echo "    --keep-portal  Jangan hapus portal creds"
+    echo "    --keep-scheduler Jangan hapus cron/task"
     echo ""
     echo "Examples:"
     echo "  superi web"
     echo "  superi cli"
+    echo "  superi logout --yes"
     echo "  superi sync                          # buka CLI (menu [P] Sync)"
     echo "  superi sync --type all --jam 09      # sync semua tipe jam 09"
     echo "  superi sync --type penyulang --jam 08-10 --dry-run"

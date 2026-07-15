@@ -5,6 +5,62 @@ Semua perubahan penting pada project ini akan didokumentasikan di file ini.
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/),
 dan project ini menggunakan [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.2.0] — 2026-07-15
+
+### Added
+
+- **Fitur Logout Akun (Web + CLI) dengan Auto-disable Cron & Auto Mode otomatis.**
+  - **Web:** Tombol Keluar (Logout) di header dashboard, setup, dan auto pages
+    kini menggunakan POST form + dialog konfirmasi yang menyebutkan
+    Auto Mode akan OTOMATIS NONAKTIF dan cron/Task Scheduler akan OTOMATIS
+    DIHAPUS saat logout.
+  - **Web:** Endpoint `POST /logout` (GET|POST backward-compat) dan
+    `POST /api/auth/logout` untuk AJAX. Setelah logout redirect ke
+    `/login?logged_out=1` dengan banner sukses.
+  - **CLI:** Menu interaktif `[O] Logout` di `superi_app.py` + command
+    `superi logout` / `superi lo` di launcher (macOS/Linux & Windows).
+    Mendukung opsi `--yes`, `--purge-all`, `--keep-portal`,
+    `--keep-scheduler`.
+  - **3-Lapis Safety Net** untuk memastikan background job benar-benar mati
+    setelah logout: (1) flag `auto_enabled=False`, (2) wipe kredensial
+    `nip/password` sehingga login auto gagal, (3) uninstall cron/Task
+    Scheduler (`# SUPER-I-AUTO` / `SUPER-I-Auto-Input`).
+  - Backup otomatis `.superi_config.json.bak` sebelum wipe untuk safety
+    re-login.
+  - Setting non-kredensial (`gi_id`, `portal_url`, `history_days`,
+    `portal_gi_id`) dipertahankan agar setup ulang mudah.
+- **Login ulang dijamin tidak bermasalah** setelah logout: token hanya
+  di RAM / session, akun di server PLN utuh, tinggal `[S] Setup` baru.
+
+### Changed
+
+- **`secret_key` Flask dipersist ke file `.flask_secret`** (permission 600,
+  gitignored) agar session tidak hilang setiap restart server.
+  Prioritas: env `FLASK_SECRET_KEY` > file `.flask_secret` > generate baru.
+- `session["nip"]` dan `session["password"]` **dihapus dari Flask session**
+  (security fix) — tidak lagi simpan plaintext di cookie store.
+- Login page (`login.html`) tampilkan banner sukses setelah logout dan
+  detail solusi saat 401 Unauthorized.
+
+### Fixed
+
+- **Penanganan error 401 Unauthorized** (NIP/password salah) sekarang
+  ramah & informatif:
+  - CLI `login()` & `do_login()` tangkap `HTTPError 401` dan tampilkan
+    penyebab + 4 langkah solusi (cek NIP tanpa spasi, password sesuai,
+    akun aktif, clock-in).
+  - Web `login()` log `Login 401 Unauthorized: NIP atau password salah`
+    dan halaman login tampilkan box solusi + link ke server PLN.
+  - Auto Mode log jika 401: solusi `superi cli → [S] Setup`.
+  - Mencegah kebingungan bahwa logout merusak kredensial (padahal
+    password di config memang sudah salah sejak awal).
+- Typo f-string `->` (U+2192) yang menyebabkan `SyntaxError` di
+  `superi_app.py` saat logout flow.
+
+### Security
+
+- `.flask_secret` dan `.superi_config.json.bak` ditambahkan ke `.gitignore`.
+
 ## [1.1.1] — 2026-07-12
 
 ### Added
@@ -114,6 +170,7 @@ otomasi pekerjaan operator Gardu Induk 20kV.
 - Troubleshooting guide untuk error umum
 - Konfigurasi & deployment instructions
 
+[1.2.0]: https://github.com/digitalpencaksilat/superi-apps/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/digitalpencaksilat/superi-apps/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/digitalpencaksilat/superi-apps/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/digitalpencaksilat/superi-apps/releases/tag/v1.0.0

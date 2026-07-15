@@ -86,6 +86,17 @@
             margin-bottom: 20px;
             text-align: center;
         }
+        .success {
+            background: rgba(81,207,102,0.15);
+            border: 1px solid rgba(81,207,102,0.3);
+            color: #69db7c;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-bottom: 20px;
+            text-align: center;
+            line-height: 1.5;
+        }
         .footer {
             text-align: center;
             margin-top: 25px;
@@ -100,8 +111,25 @@
             <h1>⚡ SUPER-I APP</h1>
             <p>Data Input Tool — GI MANGGARAI</p>
         </div>
+        {% if request.args.get('logged_out') == '1' %}
+        <div class="success">✓ Berhasil logout.<br><span style="font-size:11px; opacity:0.9;">Auto mode &amp; cron dimatikan otomatis. Silakan login kembali.</span></div>
+        {% endif %}
         {% if error %}
-        <div class="error">{{ error }}</div>
+        <div class="error">{{ error }}
+            {% if error_detail %}
+            <div style="margin-top:8px; font-size:11px; color:#ffabab; opacity:0.9; word-break:break-all;">{{ error_detail }}</div>
+            {% endif %}
+            {% if "401" in error or "Unauthorized" in error or "password salah" in error.lower() %}
+            <div style="margin-top:10px; text-align:left; font-size:11px; line-height:1.5; background: rgba(0,0,0,0.2); padding:8px 10px; border-radius:6px;">
+                <strong>Solusi:</strong><br>
+                1. Cek NIP tanpa spasi, huruf besar/kecil sesuai<br>
+                2. Pastikan password benar & belum diganti di portal<br>
+                3. Akun harus aktif & sudah absen masuk (clock-in)<br>
+                4. Cek file <code>.superi_config.json</code> kalau pakai CLI<br>
+                5. Coba login manual di <a href="https://super-i-app.plnes.co.id" target="_blank" style="color:#ffabab; text-decoration:underline;">super-i-app.plnes.co.id</a>
+            </div>
+            {% endif %}
+        </div>
         {% endif %}
         <form method="POST">
             <div class="form-group">

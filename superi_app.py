@@ -170,6 +170,355 @@ def save_config(cfg):
     with open(CONFIG_FILE, 'w') as f:
         json.dump(cfg, f, indent=2)
 
+
+# ============================================================
+# LOGOUT - Credential wipe + Auto disable + Scheduler cleanup
+# ============================================================
+
+def backup_config():
+    """Backup config file sebelum wipe, untuk safety re-login."""
+    try:
+        if os.path.exists(CONFIG_FILE):
+            import shutil
+            bak = CONFIG_FILE + ".bak"
+            shutil.copy2(CONFIG_FILE, bak)
+            try:
+                os.chmod(bak, 0o600)
+            except Exception:
+                pass
+            return bak
+    except Exception:
+        pass
+    return None
+
+
+def clear_history_cache():
+    """Clear fetch_history_bulk in-memory cache."""
+    try:
+        # _cache adalah mutable default arg di fetch_history_bulk
+        # akses via __defaults__
+        cache_obj = fetch_history_bulk.__defaults__[0] if fetch_history_bulk.__defaults__ else None
+        if isinstance(cache_obj, dict):
+            cache_obj.clear()
+    except Exception:
+        pass
+
+
+def disable_auto_and_scheduler(keep_scheduler=False):
+    """Lapis 1 + 3: matikan auto flag + (opsional) uninstall scheduler.
+    Return dict status.
+    """
+    cfg = load_config()
+    was_enabled = cfg.get("auto_enabled", False)
+    cfg["auto_enabled"] = False
+    save_config(cfg)
+
+    sched_removed = False
+    sched_error = None
+    if not keep_scheduler:
+        try:
+            if scheduler_is_installed():
+                if platform.system() == "Windows":
+                    ok, msg = win_task_uninstall()
+                else:
+                    ok, msg = cron_uninstall()
+                sched_removed = ok
+                if not ok:
+                    sched_error = msg
+            else:
+                sched_removed = True  # already not installed = success
+        except Exception as e:
+            sched_error = str(e)
+
+    return {
+        "auto_was_enabled": was_enabled,
+        "auto_disabled": True,
+        "scheduler_removed": sched_removed,
+        "scheduler_error": sched_error,
+    }
+
+
+def clear_credentials(purge_all=False, keep_portal=False, keep_scheduler=False, keep_non_creds=True):
+    """Wipe kredensial dari .superi_config.json (dan fallback ~/.superi_config.json).
+
+    Args:
+        purge_all: kalau True, hapus file config total (project + home).
+        keep_portal: kalau True, jangan hapus portal_user/password.
+        keep_scheduler: kalau True, jangan uninstall cron/task.
+        keep_non_creds: kalau True, pertahankan gi_id, portal_url, history_days, etc.
+
+    Return status dict.
+    """
+    backup_config()
+
+    result = {
+        "project_cleared": False,
+        "home_cleared": False,
+        "auto_status": None,
+        "purged": purge_all,
+    }
+
+    if purge_all:
+        # Hapus total file config
+        for p in [CONFIG_FILE, _HOME_CONFIG]:
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+        # Scheduler
+        if not keep_scheduler:
+            try:
+                if scheduler_is_installed():
+                    if platform.system() == "Windows":
+                        win_task_uninstall()
+                    else:
+                        cron_uninstall()
+            except Exception:
+                pass
+        clear_history_cache()
+        result["project_cleared"] = True
+        result["home_cleared"] = True
+        return result
+
+    # Soft wipe: hapus nip/password (+ optional portal) tapi keep setting lain
+    cfg = load_config()
+    had_nip = bool(cfg.get("nip"))
+
+    # Keys kredensial yang dihapus
+    cred_keys = ["nip", "password"]
+    if not keep_portal:
+        cred_keys += ["portal_user", "portal_password"]
+
+    for k in cred_keys:
+        cfg.pop(k, None)
+
+    # Auto disable (lapis 1)
+    cfg["auto_enabled"] = False
+    # keep_non_creds = True -> biarkan gi_id, portal_url, portal_gi_id, history_days, auto_* lain tetap
+    # jika False, reset juga tapi tetap simpan file kosong
+    save_config(cfg)
+
+    # Bersihkan juga file home legacy jika ada
+    if os.path.exists(_HOME_CONFIG):
+        try:
+            with open(_HOME_CONFIG) as f:
+                hc = json.load(f)
+            changed = False
+            for k in cred_keys:
+                if k in hc:
+                    hc.pop(k)
+                    changed = True
+            if "auto_enabled" in hc:
+                hc["auto_enabled"] = False
+                changed = True
+            if changed:
+                if not hc.get("nip") and not hc:  # kosong total -> hapus
+                    os.remove(_HOME_CONFIG)
+                else:
+                    with open(_HOME_CONFIG, "w") as f:
+                        json.dump(hc, f, indent=2)
+            result["home_cleared"] = True
+        except Exception:
+            pass
+
+    # Lapis 3: scheduler uninstall (best-effort)
+    if not keep_scheduler:
+        try:
+            if scheduler_is_installed():
+                if platform.system() == "Windows":
+                    win_task_uninstall()
+                else:
+                    cron_uninstall()
+        except Exception:
+            pass
+
+    clear_history_cache()
+
+    result["project_cleared"] = had_nip
+    result["had_nip"] = had_nip
+    result["kept_portal"] = keep_portal
+    result["kept_scheduler"] = keep_scheduler
+    return result
+
+
+def do_logout_interactive(current_user=None):
+    """Menu logout interaktif: konfirmasi, wipe, auto-disable, scheduler cleanup.
+
+    Akan dipanggil dari main() menu [O].
+    Return (should_exit_to_setup: bool, new_config: dict)
+    """
+    clear()
+    header("🚪 LOGOUT AKUN")
+    print()
+    cfg = load_config()
+
+    nip = cfg.get("nip", "")
+    has_portal = bool(cfg.get("portal_user") and cfg.get("portal_password"))
+    auto_on = cfg.get("auto_enabled", False)
+    sched_on = scheduler_is_installed()
+    os_name = "Task Scheduler" if platform.system() == "Windows" else "cron"
+
+    # Info akun aktif
+    if current_user and isinstance(current_user, dict):
+        nama = current_user.get("namaLengkap", "?")
+        print(f"  {C['B']}Akun aktif:{C['R']} {nama} {C['D']}({nip}){C['R']}")
+    elif nip:
+        print(f"  {C['B']}Akun aktif:{C['R']} {nip}")
+    else:
+        print(f"  {C['Y']}⚠ Tidak ada akun tersimpan di config{C['R']}")
+        print(f"  {C['D']}Token di RAM akan dibuang, tapi tidak ada kredensial file yang dihapus.{C['R']}")
+        print()
+        input(f"  {C['D']}[Enter]{C['R']}")
+        return False, cfg
+
+    print()
+    print(f"  {C['Y']}{C['B']}Yang akan terjadi saat logout:{C['R']}")
+    print(f"  {C['D']}  {'─'*44}{C['R']}")
+    print(f"  {C['RE']}  ✗ Hapus:{C['R']} NIP + Password SUPER-I")
+    if has_portal:
+        print(f"  {C['RE']}  ✗ Hapus:{C['R']} Portal APD (user + password)")
+    else:
+        print(f"  {C['D']}  · Portal APD belum diset{C['R']}")
+    print(f"  {C['G']}  ✓ Keep:{C['R']} GI ID, Portal URL, history_days (setting non-kredensial)")
+    print(f"  {C['RE']}  ✗ Auto Mode:{C['R']} {'AKTIF -> akan OTOMATIS NONAKTIF' if auto_on else 'sudah nonaktif'}")
+    sched_msg = 'TERPASANG -> akan OTOMATIS DIHAPUS' if sched_on else 'belum terpasang'
+    print(f"  {C['RE']}  ✗ Scheduler {os_name}:{C['R']} {sched_msg}")
+    print(f"  {C['D']}  · Token RAM: dibuang (perlu Login Ulang / Setup){C['R']}")
+    print(f"  {C['D']}  · Backup: .superi_config.json.bak akan dibuat{C['R']}")
+    print()
+
+    # Opsi
+    keep_portal = False
+    keep_sched = False
+
+    if has_portal:
+        ans = input(f"  {C['B']}Tetap simpan kredensial Portal APD?{C['R']} {C['D']}(y/N){C['R']}: ").strip().lower()
+        keep_portal = (ans == 'y')
+
+    if sched_on:
+        ans2 = input(f"  {C['B']}Hapus jadwal {os_name}?{C['R']} {C['D']}(Y/n){C['R']}: ").strip().lower()
+        # default Y (hapus), n = keep
+        keep_sched = (ans2 == 'n')
+
+    print()
+    final = input(f"  {C['RE']}{C['B']}Yakin logout & hapus kredensial?{C['R']} {C['D']}(y/N){C['R']}: ").strip().lower()
+    if final != 'y':
+        print(f"\n  {C['Y']}⊘ Logout dibatalkan.{C['R']}")
+        input(f"  {C['D']}[Enter]{C['R']}")
+        return False, cfg
+
+    # Eksekusi
+    print()
+    print(f"  {C['Y']}Melakukan logout...{C['R']}")
+
+    bak_path = backup_config()
+    if bak_path:
+        print(f"  {C['D']}  · Backup dibuat: {os.path.basename(bak_path)}{C['R']}")
+
+    # Wipe
+    status = clear_credentials(
+        purge_all=False,
+        keep_portal=keep_portal,
+        keep_scheduler=keep_sched,
+    )
+
+    # Verifikasi
+    new_cfg = load_config()
+    print(f"  {C['G']}  ✓ Kredensial SUPER-I dihapus{C['R']}")
+    if not keep_portal and has_portal:
+        print(f"  {C['G']}  ✓ Kredensial Portal APD dihapus{C['R']}")
+    elif keep_portal:
+        print(f"  {C['D']}  · Kredensial Portal APD dipertahankan{C['R']}")
+
+    if status.get("auto_status") is None:
+        # kita sudah set auto_enabled=False di clear_credentials
+        print(f"  {C['G']}  ✓ Auto Mode OTOMATIS NONAKTIF{C['R']}")
+    if sched_on and not keep_sched:
+        if not scheduler_is_installed():
+            print(f"  {C['G']}  ✓ Scheduler {os_name} OTOMATIS DIHAPUS{C['R']}")
+        else:
+            print(f"  {C['Y']}  ⚠ Gagal hapus {os_name}, silakan hapus manual{C['R']}")
+
+    print()
+    print(f"  {C['G']}✓ Logout berhasil!{C['R']}")
+    print(f"  {C['D']}  Token di RAM sudah dibuang.{C['R']}")
+    print(f"  {C['D']}  Gunakan [S] Setup untuk login akun baru, atau{C['R']}")
+    print(f"  {C['D']}  tutup dan buka CLI lagi -> otomatis minta setup.{C['R']}")
+    print()
+    print(f"  {C['D']}  Untuk login ulang: NIP + password baru akan diminta saat{C['R']}")
+    print(f"  {C['D']}  kamu pilih [S] Setup atau next start.{C['R']}")
+    print()
+    input(f"  {C['D']}[Enter untuk kembali ke menu...]{C['R']}")
+
+    return True, new_cfg
+
+
+def cmd_logout_cli(argv):
+    """Non-interactive CLI: superi_app.py --logout [options]
+    Options:
+      --yes              skip konfirmasi
+      --purge-all        hapus file config total
+      --keep-portal      jangan hapus portal creds
+      --keep-scheduler   jangan uninstall cron/task
+    """
+    purge_all = "--purge-all" in argv
+    keep_portal = "--keep-portal" in argv
+    keep_sched = "--keep-scheduler" in argv
+    force_yes = "--yes" in argv or "-y" in argv
+
+    cfg = load_config()
+    nip = cfg.get("nip", "")
+    has_portal = bool(cfg.get("portal_user"))
+    auto_on = cfg.get("auto_enabled", False)
+    sched_on = scheduler_is_installed()
+
+    if not nip and not os.path.exists(CONFIG_FILE):
+        print(f"  {C['Y']}⚠ Tidak ada config ditemukan, tidak ada yang perlu di-logout{C['R']}")
+        return True
+
+    if not force_yes:
+        print()
+        print(f"  {C['Y']}{C['B']}LOGOUT{C['R']}")
+        if nip:
+            print(f"  Akun: {nip}")
+        if auto_on:
+            print(f"  Auto: AKTIF → akan NONAKTIF otomatis")
+        if sched_on:
+            print(f"  Scheduler: TERPASANG → akan DIHAPUS otomatis" + (" (skip karena --keep-scheduler)" if keep_sched else ""))
+        print(f"  Wipe : {'FULL PURGE (hapus file total)' if purge_all else 'nip/password' + ('' if not has_portal or keep_portal else ' + portal')}")
+        print()
+        ans = input(f"  Yakin logout? (y/N): ").strip().lower()
+        if ans != 'y':
+            print(f"  {C['Y']}⊘ Dibatalkan{C['R']}")
+            return False
+
+    bak = backup_config()
+    if bak:
+        print(f"  Backup: {bak}")
+
+    status = clear_credentials(
+        purge_all=purge_all,
+        keep_portal=keep_portal,
+        keep_scheduler=keep_sched,
+    )
+
+    if purge_all:
+        print(f"  {C['G']}✓ Config file dihapus total (purge){C['R']}")
+    else:
+        print(f"  {C['G']}✓ Kredensial SUPER-I dihapus, auto_enabled=False{C['R']}")
+        if not keep_portal and has_portal:
+            print(f"  {C['G']}✓ Portal kredensial dihapus{C['R']}")
+        if sched_on and not keep_sched:
+            if not scheduler_is_installed():
+                print(f"  {C['G']}✓ Scheduler dihapus{C['R']}")
+            else:
+                print(f"  {C['Y']}⚠ Scheduler gagal dihapus (cek permission){C['R']}")
+
+    print()
+    print(f"  {C['G']}✓ Logout berhasil. Login ulang: jalankan superi cli → [S] Setup{C['R']}")
+    return True
+
 _VALID_HISTORY_DAYS = {3, 7, 14}
 
 def get_history_days():
@@ -183,14 +532,29 @@ def get_history_days():
     return val if val in _VALID_HISTORY_DAYS else 7
 
 def login(nip, password):
-    req = urllib.request.Request(AUTH_URL,
-        data=json.dumps({"nip": nip, "password": password}).encode(),
-        headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req) as resp:
-        data = json.loads(resp.read())
-    if not data.get("success"):
-        raise Exception(data.get("message", "Login gagal"))
-    return data["data"]["access_token"], data["data"]["user"]
+    """Login ke SUPER-I APP, dengan handling 401 yang jelas."""
+    try:
+        req = urllib.request.Request(AUTH_URL,
+            data=json.dumps({"nip": nip, "password": password}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+        if not data.get("success"):
+            raise Exception(data.get("message", "Login gagal"))
+        return data["data"]["access_token"], data["data"]["user"]
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode()
+            err_data = json.loads(body)
+            msg = err_data.get("message", "")
+        except Exception:
+            msg = e.reason if hasattr(e, 'reason') else str(e)
+        if e.code == 401:
+            raise Exception(f"NIP atau password salah! ({msg or 'Unauthorized'}). Cek kembali kredensial di .superi_config.json atau jalankan [S] Setup untuk perbarui.")
+        raise Exception(f"HTTP {e.code}: {msg or e.reason}")
+    except urllib.error.URLError as e:
+        raise Exception(f"Tidak bisa terhubung ke server: {e.reason}. Cek koneksi internet / VPN PLN.")
+
 
 def api_get(token, path, params=None):
     url = f"{API_BASE}{path}"
@@ -682,11 +1046,13 @@ def setup_config():
     input(f"  {C['D']}[Enter untuk lanjut...]{C['R']}")
 
 def do_login(config):
-    """Login, return token, user info, dan gi_id."""
+    """Login, return token, user info, dan gi_id. Handling 401 dengan petunjuk jelas."""
     nip = config.get("nip")
     password = config.get("password")
     if not nip or not password:
         print(f"  {C['RE']}✗ Konfigurasi belum di-setup. Jalankan setup dulu.{C['R']}")
+        print(f"  {C['D']}  File: {CONFIG_FILE}{C['R']}")
+        print(f"  {C['D']}  Atau pilih [S] Setup di menu.{C['R']}")
         return None, None, None
     
     try:
@@ -721,7 +1087,20 @@ def do_login(config):
         
         return token, user, gi_id
     except Exception as e:
-        print(f"  {C['RE']}✗ Login gagal: {e}{C['R']}")
+        err_str = str(e)
+        if "401" in err_str or "password salah" in err_str.lower() or "unauthorized" in err_str.lower() or "NIP" in err_str:
+            print(f"  {C['RE']}✗ Login gagal (401 Unauthorized):{C['R']}")
+            print(f"  {C['Y']}  Penyebab: NIP atau password di config salah / kadaluarsa{C['R']}")
+            print(f"  {C['D']}  NIP di config: {nip}{C['R']}")
+            print(f"  {C['D']}  File: {CONFIG_FILE}{C['R']}")
+            print()
+            print(f"  {C['B']}Solusi:{C['R']}")
+            print(f"    1. Pilih {C['C']}[S] Setup{C['R']} untuk input NIP/password baru")
+            print(f"    2. Atau edit manual file .superi_config.json")
+            print(f"    3. Pastikan NIP tanpa spasi, password sesuai akun PLN")
+            print(f"    4. Cek apakah akun masih aktif & sudah clock-in di SUPER-I")
+        else:
+            print(f"  {C['RE']}✗ Login gagal: {e}{C['R']}")
         return None, None, None
 
 def show_data(token, data_type, gi_id, date_str):
@@ -1819,6 +2198,20 @@ def auto_mode_menu():
             input(f"  {C['D']}[Enter]{C['R']}")
 
 def main():
+    # CLI flag: superi_app.py --logout [opts]
+    if any(a in sys.argv for a in ("--logout", "--lo")):
+        # filter args after --logout
+        try:
+            idx = sys.argv.index("--logout")
+        except ValueError:
+            try:
+                idx = sys.argv.index("--lo")
+            except ValueError:
+                idx = 1
+        extra = sys.argv[idx + 1 :] if idx + 1 < len(sys.argv) else []
+        cmd_logout_cli(extra)
+        return
+
     config = load_config()
     
     # Setup jika belum ada config
@@ -1859,7 +2252,7 @@ def main():
 
         # Lain
         print(f"  {C['D']}{C['B']}PENGATURAN{C['R']}")
-        print(f"  {C['C']}[G]{C['R']} Ganti Tanggal   {C['C']}[L]{C['R']} Login Ulang   {C['C']}[S]{C['R']} Setup   {C['RE']}[0]{C['R']} Keluar")
+        print(f"  {C['C']}[G]{C['R']} Ganti Tanggal   {C['C']}[L]{C['R']} Login Ulang   {C['C']}[O]{C['R']} Logout   {C['C']}[S]{C['R']} Setup   {C['RE']}[0]{C['R']} Keluar")
         print()
         # Auto mode status
         _auto_cfg = load_config()
@@ -1922,6 +2315,14 @@ def main():
                 config = load_config()
             elif choice == 'p':
                 sync_portal_menu(date_str)
+            elif choice == 'o':
+                did_logout, new_cfg = do_logout_interactive(current_user=user)
+                if did_logout:
+                    # Token RAM dibuang, config reload, user harus setup ulang
+                    token = None
+                    user = None
+                    gi_id = None
+                    config = new_cfg if isinstance(new_cfg, dict) else load_config()
         except Exception as e:
             print(f"\n  ✗ Error: {e}")
             input(f"  {C['D']}[Enter]{C['R']}")

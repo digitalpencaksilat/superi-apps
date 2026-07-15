@@ -56,7 +56,41 @@ def _h_user_agent():
 
 
 app = Flask(__name__)
-app.secret_key = os.urandom(32)
+
+def _get_flask_secret():
+    """Persist secret_key agar session tidak hilang tiap restart.
+    Prioritas: env FLASK_SECRET_KEY > file .flask_secret > generate + simpan.
+    """
+    # 1. Env var
+    env_key = os.environ.get("FLASK_SECRET_KEY", "").strip()
+    if env_key:
+        return env_key.encode() if len(env_key) < 64 else env_key
+
+    # 2. File .flask_secret
+    secret_file = os.path.join(SCRIPT_DIR, ".flask_secret")
+    if os.path.exists(secret_file):
+        try:
+            with open(secret_file, "r") as f:
+                val = f.read().strip()
+            if val:
+                return val.encode() if len(val) < 256 else bytes.fromhex(val) if all(c in "0123456789abcdefABCDEF" for c in val) else val.encode()
+        except Exception:
+            pass
+
+    # 3. Generate baru + simpan
+    new_secret = os.urandom(32)
+    try:
+        with open(secret_file, "w") as f:
+            f.write(new_secret.hex())
+        try:
+            os.chmod(secret_file, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return new_secret
+
+app.secret_key = _get_flask_secret()
 
 BASE_URL = "https://super-i-app.plnes.co.id"
 API_BASE = f"{BASE_URL}/api"
@@ -85,7 +119,7 @@ DUMMY_JPEG = bytes([
 # ============================================================
 
 def login(nip, password):
-    """Login ke SUPER-I APP."""
+    """Login ke SUPER-I APP. Return (token, user) atau (None, None, error_msg)"""
     try:
         req = urllib.request.Request(
             f"{API_BASE}/auth/login-mobile",
@@ -95,6 +129,25 @@ def login(nip, password):
             data = json.loads(resp.read())
         if data.get("success"):
             return data["data"]["access_token"], data["data"]["user"]
+        # Server responded tapi success=False (misal pesan validation)
+        msg = data.get("message", "Login gagal")
+        print(f"Login failed: {msg}")
+        return None, None
+    except urllib.error.HTTPError as e:
+        # 401 = NIP/password salah - kasih pesan yang jelas
+        try:
+            body = e.read().decode()
+            err_data = json.loads(body)
+            server_msg = err_data.get("message", "")
+            if e.code == 401:
+                print(f"Login 401 Unauthorized: {server_msg or 'NIP atau password salah'}")
+            else:
+                print(f"Login HTTP {e.code}: {server_msg}")
+        except Exception:
+            if e.code == 401:
+                print(f"Login 401 Unauthorized: NIP atau password salah")
+            else:
+                print(f"Login HTTP {e.code}: {e.reason}")
         return None, None
     except Exception as e:
         print(f"Login error: {e}")
@@ -411,7 +464,7 @@ def index():
 
 @app.route("/login", methods=["GET", "POST"])
 def login_page():
-    """Halaman login."""
+    """Halaman login. Error 401 kasih pesan jelas."""
     if request.method == "POST":
         nip = request.form.get("nip", "").strip()
         password = request.form.get("password", "").strip()
@@ -423,19 +476,65 @@ def login_page():
         if token and user:
             session["token"] = token
             session["user"] = user
-            session["nip"] = nip
-            session["password"] = password
+            # NOTE: password & nip sengaja TIDAK disimpan di session lagi (security fix)
             return redirect(url_for("dashboard"))
         
-        return render_template("login.html", error="Login gagal. Cek NIP/password.")
+        return render_template("login.html", 
+            error="Login gagal (401 Unauthorized): NIP atau password salah. "
+                  "Pastikan NIP tanpa spasi, password sesuai akun PLN, "
+                  "dan akun masih aktif & sudah clock-in.",
+            error_detail=f"NIP: {nip}")
     
     return render_template("login.html")
 
-@app.route("/logout")
+
+def _disable_auto_on_logout():
+    """Helper: auto-disable cron & auto mode saat logout (3-lapis safety).
+    Lapis 1: set auto_enabled=False di config file.
+    Lapis 2: nip/password sudah tidak ada di session, tapi config creds dipertahankan
+              untuk login ulang mudah (hanya flag yang dimatikan di web logout).
+              Untuk CLI logout nanti ada wipe terpisah.
+    Lapis 3: uninstall cron / task scheduler (best-effort).
+    """
+    try:
+        cfg = _load_config()
+        # Lapis 1: matikan flag
+        if cfg.get("auto_enabled"):
+            cfg["auto_enabled"] = False
+            _save_config(cfg)
+    except Exception:
+        pass
+
+    # Lapis 3: scheduler uninstall (best-effort, jangan bikin logout gagal)
+    try:
+        if hasattr(_cli, "scheduler_is_installed") and _cli.scheduler_is_installed():
+            if hasattr(_cli, "cron_uninstall"):
+                _cli.cron_uninstall()
+            if hasattr(_cli, "win_task_uninstall"):
+                try:
+                    _cli.win_task_uninstall()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+@app.route("/logout", methods=["GET", "POST"])
 def logout():
-    """Logout."""
+    """Logout: auto-disable cron/auto + clear session.
+    Support GET (backward compat) + POST (lebih aman).
+    """
+    _disable_auto_on_logout()
     session.clear()
-    return redirect(url_for("login_page"))
+    return redirect(url_for("login_page", logged_out=1))
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def api_auth_logout():
+    """API logout untuk AJAX/SPA call (return JSON)."""
+    _disable_auto_on_logout()
+    session.clear()
+    return jsonify({"success": True, "message": "Logout berhasil. Auto mode & cron dinonaktifkan."})
 
 @app.route("/dashboard")
 @login_required

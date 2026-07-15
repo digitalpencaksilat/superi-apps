@@ -128,8 +128,17 @@
             <a href="/dashboard">Dashboard</a>
             <a href="/auto">Auto Mode</a>
             <a href="/setup" class="active">Setup</a>
-            <a href="/logout" class="btn-logout">Keluar</a>
+            <form id="logoutFormSetup" method="POST" action="/logout" style="display:inline; margin:0;">
+                <button type="button" class="btn-logout" style="cursor:pointer; font-family:inherit;" onclick="confirmLogout('logoutFormSetup')">Keluar</button>
+            </form>
         </div>
+    <script>
+    function confirmLogout(formId) {
+        if (confirm('Yakin ingin logout?\n\n• Auto mode akan OTOMATIS NONAKTIF\n• Cron/Task Scheduler akan OTOMATIS DIHAPUS\n• Perlu login ulang untuk akses dashboard')) {
+            document.getElementById(formId).submit();
+        }
+    }
+    </script>
     </div>
 
     <div class="container">

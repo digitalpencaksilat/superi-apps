@@ -173,7 +173,9 @@
             <a href="/dashboard">Dashboard</a>
             <a href="/auto" class="active">Auto Mode</a>
             <a href="/setup">Setup</a>
-            <a href="/logout" class="btn-logout">Keluar</a>
+            <form id="logoutFormAuto" method="POST" action="/logout" style="display:inline; margin:0;">
+                <button type="button" class="btn-logout" style="cursor:pointer; font-family:inherit;" onclick="confirmLogout('logoutFormAuto')">Keluar</button>
+            </form>
         </div>
     </div>
 
@@ -380,6 +382,13 @@
             toast.textContent = msg;
             toast.className = 'toast show ' + type;
             setTimeout(() => toast.classList.remove('show'), 4000);
+        }
+
+        function confirmLogout(formId) {
+            if (confirm('Yakin ingin logout?\n\n• Auto mode akan OTOMATIS NONAKTIF\n• Cron/Task Scheduler akan OTOMATIS DIHAPUS\n• Perlu login ulang untuk akses dashboard')) {
+                var form = document.getElementById(formId);
+                if (form) form.submit();
+            }
         }
 
         loadStatus();

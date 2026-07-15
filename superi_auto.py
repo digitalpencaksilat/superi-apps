@@ -560,7 +560,13 @@ def run_auto(force_jam=None, types=None, dry_run=False):
         token, user = a.login(nip, password)
         log(f"SUPER-I login OK: {user.get('namaLengkap')}")
     except Exception as e:
-        log(f"SUPER-I login gagal: {e}", "ERROR")
+        err_msg = str(e)
+        if "401" in err_msg or "password salah" in err_msg.lower() or "unauthorized" in err_msg.lower():
+            log(f"SUPER-I login gagal 401: NIP/password salah. Cek .superi_config.json atau [S] Setup. Detail: {e}", "ERROR")
+            log(f"  Solusi: superi cli -> [S] Setup -> masukkan NIP/password baru yang valid", "ERROR")
+            log(f"  File: {CONFIG_FILE}", "ERROR")
+        else:
+            log(f"SUPER-I login gagal: {e}", "ERROR")
         return False
     
     gi_id = cfg.get("gi_id", 222)
@@ -664,6 +670,9 @@ def main():
     
     if "--help" in args or "-h" in args:
         print(__doc__)
+        print("\nTambahan (logout):")
+        print("  --logout [--yes] [--purge-all] [--keep-portal] [--keep-scheduler]")
+        print("    Logout akun: hapus kredensial + auto OFF + hapus scheduler otomatis")
         return
     
     if "--enable" in args:
@@ -674,6 +683,52 @@ def main():
         return
     if "--status" in args:
         cmd_status()
+        return
+    if "--logout" in args or "--lo" in args:
+        # Delegasi ke superi_app.cmd_logout_cli agar logic konsisten
+        extra = [a for a in args if a not in ("--logout", "--lo")]
+        # a = superi_app module
+        try:
+            a.cmd_logout_cli(extra)
+        except AttributeError:
+            # fallback: panggil langsung clear
+            cfg = load_cfg()
+            if "--yes" not in extra and "-y" not in extra:
+                print("\n  Logout akun? Ini akan hapus kredensial + auto OFF + hapus scheduler.")
+                ans = input("  Yakin? (y/N): ").strip().lower()
+                if ans != 'y':
+                    print("  Dibatalkan.")
+                    return
+            keep_portal = "--keep-portal" in extra
+            keep_sched = "--keep-scheduler" in extra
+            purge = "--purge-all" in extra
+            try:
+                import shutil
+                if os.path.exists(CONFIG_FILE):
+                    shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".bak")
+            except Exception:
+                pass
+            if purge:
+                for p in [CONFIG_FILE]:
+                    try:
+                        if os.path.exists(p):
+                            os.remove(p)
+                    except Exception:
+                        pass
+            else:
+                c = load_cfg()
+                for k in ["nip", "password"] + ([] if keep_portal else ["portal_user", "portal_password"]):
+                    c.pop(k, None)
+                c["auto_enabled"] = False
+                save_cfg(c)
+            if not keep_sched:
+                try:
+                    if hasattr(a, "scheduler_is_installed") and a.scheduler_is_installed():
+                        if hasattr(a, "cron_uninstall"):
+                            a.cron_uninstall()
+                except Exception:
+                    pass
+            print("\n  ✓ Logout berhasil. Auto OFF + kredensial dihapus.")
         return
     
     # Parse opsi

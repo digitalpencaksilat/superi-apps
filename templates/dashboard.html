@@ -395,7 +395,9 @@
         <div style="display:flex; gap:8px; align-items:center;">
             <a href="/auto" style="padding:6px 14px; border-radius:6px; text-decoration:none; font-size:12px; font-weight:600; border:1px solid #2a3f5f; color:#8b9bb4;">🤖 Auto Mode</a>
             <a href="/setup" style="padding:6px 14px; border-radius:6px; text-decoration:none; font-size:12px; font-weight:600; border:1px solid #2a3f5f; color:#8b9bb4;">⚙ Setup</a>
-            <a href="/logout" class="btn-logout">Keluar</a>
+            <form id="logoutFormDash" method="POST" action="/logout" style="display:inline; margin:0;">
+                <button type="button" class="btn-logout" style="cursor:pointer; font-family:inherit;" onclick="confirmLogout('logoutFormDash')">Keluar</button>
+            </form>
         </div>
     </div>
 
@@ -1328,6 +1330,14 @@
             
             btn.disabled = false;
             btn.textContent = 'Simpan Semua';
+        }
+
+        function confirmLogout(formId) {
+            if (confirm('Yakin ingin logout?\n\n• Auto mode akan OTOMATIS NONAKTIF\n• Cron/Task Scheduler akan OTOMATIS DIHAPUS\n• Perlu login ulang untuk akses dashboard')) {
+                // Try AJAX first for smooth UX, fallback to form POST
+                var form = document.getElementById(formId);
+                if (form) form.submit();
+            }
         }
     </script>
 </body>

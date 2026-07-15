@@ -113,6 +113,22 @@ if /i "%1"=="a" (
     "%PYTHON%" superi_auto.py %1 %2 %3 %4 %5 %6 %7 %8 %9
     goto :end
 )
+if /i "%1"=="logout" (
+    shift
+    echo.
+    echo   Logout akun SUPER-I... Auto OFF + hapus scheduler otomatis
+    "%PYTHON%" superi_app.py --logout %1 %2 %3 %4 %5 %6 %7 %8 %9
+    pause
+    goto :end
+)
+if /i "%1"=="lo" (
+    shift
+    echo.
+    echo   Logout akun SUPER-I... Auto OFF + hapus scheduler otomatis
+    "%PYTHON%" superi_app.py --logout %1 %2 %3 %4 %5 %6 %7 %8 %9
+    pause
+    goto :end
+)
 
 REM Help
 echo.
@@ -129,6 +145,7 @@ echo     web, w            Web dashboard ^(http://localhost:8888^)
 echo     sync, s [opts]    Sync data ke Portal APD
 echo     auto, a [opts]    Auto input + sync ^(untuk Task Scheduler^)
 echo     input, i [opts]   Scripting mode
+echo     logout, lo        Logout akun ^(hapus kredensial + auto OFF + hapus cron otomatis^)
 echo.
 echo   Examples:
 echo     superi cli

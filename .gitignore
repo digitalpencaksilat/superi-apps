@@ -1,5 +1,7 @@
 # Credentials & config
 .superi_config.json
+.superi_config.json.bak
+.flask_secret
 
 # Python
 __pycache__/
