@@ -77,8 +77,41 @@ _LAT_LONG_ADDRESSES = [
 ]
 
 # ============================================================
-# JPEG HANDLING
+# JPEG HANDLING - ANTI BYPASS: 720x720 SQUARE MIRIP APP ASLI
+# Audit server: stored 720x720 (95%) / 720x960 (5%), baseline JPEG,
+# no progressive, no COM, no EXIF, 14-51KB avg 27KB.
+# Pool: ambil dari photo/pool/ -> crop center square 720x720
 # ============================================================
+
+# Target dimensi final (sesuai foto asli dari aplikasi)
+# Server menyimpan 720x720 dominan, jadi kita upload juga 720x720 agar tidak terdeteksi
+# sebagai bypass via log dimensi original.
+_TARGET_DIMS = [
+    # (W, H, weight) — 85% square 720x720, 15% variasi realistic
+    (720, 720, 60),   # dominan, match server stored
+    (720, 960, 8),    # portrait 3:4 — 5% terjadi di server (outlier asli)
+    (960, 720, 4),    # landscape
+    (1080, 1080, 12), # square HD — kamera HP crop
+    (1080, 1440, 6),  # portrait 3:4 HD
+    (1440, 1080, 4),  # landscape 4:3
+    (1440, 1440, 6),  # square bigger
+]
+
+def _pick_target_dim():
+    """Pick (W,H) weighted sesuai audit server — dominan 720x720."""
+    choices = []
+    for w, h, wt in _TARGET_DIMS:
+        choices.extend([(w, h)] * wt)
+    return random.choice(choices)
+
+def _get_target_dim_720():
+    """Default return 720x720 — untuk pool crop agar seragam dengan app asli."""
+    # 85% chance 720x720, 15% chance 720x960 (sesuai outlier server)
+    if random.random() < 0.85:
+        return (720, 720)
+    else:
+        return (720, 960) if random.random() < 0.7 else (1080, 1080)
+
 
 def _get_photo_pool():
     """Pool of real operator sample photos in photo/pool/ - supports jpg/jpeg/png."""
@@ -108,7 +141,12 @@ def _get_photo_pool():
 
 
 def _add_com_segment(jpeg_data: bytes, comment_len: int = 32) -> bytes:
-    """Insert COM segment after SOI safely to vary file without corrupting (valid JPEG)."""
+    """
+    Insert COM segment — DEPRECATED untuk anti-deteksi.
+    COM FF FE tidak ada di foto kamera HP asli, jadi kita NONAKTIFKAN.
+    Fungsi ini dipertahankan untuk backward-compat tapi tidak dipakai lagi
+    kecuali explicitly dipanggil.
+    """
     if not jpeg_data.startswith(b"\xff\xd8"):
         return jpeg_data
     comment = os.urandom(comment_len)
@@ -117,11 +155,43 @@ def _add_com_segment(jpeg_data: bytes, comment_len: int = 32) -> bytes:
     return jpeg_data[:2] + com + jpeg_data[2:]
 
 
-def _reencode_pool_image(path: str):
-    """Re-encode pool image (JPG/PNG) to JPEG varying but always valid."""
+def _crop_center_square(im):
+    """Crop center square dari image (misal 1200x1600 -> 1200x1200) lalu resize ke target."""
+    from PIL import Image
+    w, h = im.size
+    # Ambil sisi terkecil sebagai square
+    side = min(w, h)
+    left = (w - side) // 2
+    top = (h - side) // 2
+    right = left + side
+    bottom = top + side
+    # Sedikit randomize crop position (±5% dari center) biar tidak exact
+    offset_x = random.randint(-side // 20, side // 20)
+    offset_y = random.randint(-side // 20, side // 20)
+    left = max(0, min(w - side, left + offset_x))
+    top = max(0, min(h - side, top + offset_y))
+    right = left + side
+    bottom = top + side
+    return im.crop((left, top, right, bottom))
+
+
+def _reencode_pool_image(path: str, target_w: int = None, target_h: int = None):
+    """
+    Re-encode pool image ke 720x720 square mirip app asli.
+    
+    Proses:
+    1. Open + convert RGB
+    2. Crop center square (anti bypass: dimensi jadi square 720x720 seperti app)
+    3. Resize ke target_w x target_h (default 720x720, weighted sesuai audit)
+    4. Variasi pixel halus (1-3 pixel tweak) — anti hash duplicate
+    5. Save baseline JPEG (progressive=False, no EXIF, no COM)
+    
+    Returns: JPEG bytes atau None
+    """
     try:
         from PIL import Image
         im = Image.open(path)
+        # Ensure RGB
         if im.mode in ('RGBA', 'LA', 'P'):
             bg = Image.new('RGB', im.size, (random.randint(200, 255), random.randint(200, 255), random.randint(200, 255)))
             if im.mode == 'P':
@@ -131,49 +201,137 @@ def _reencode_pool_image(path: str):
         elif im.mode != 'RGB':
             im = im.convert('RGB')
 
-        w, h = im.size
-        if w > 1920 or h > 1920:
-            scale = 1920 / max(w, h)
-            nw = int(w * scale)
-            nh = int(h * scale)
-            im = im.resize((nw, nh), Image.LANCZOS)
-            w, h = nw, nh
-        else:
-            if random.random() < 0.4:
-                nw = max(10, w + random.randint(-3, 3))
-                nh = max(10, h + random.randint(-3, 3))
-                if nw != w or nh != h:
-                    im = im.resize((nw, nh), Image.LANCZOS)
+        # === ANTI BYPASS: CROP SQUARE + RESIZE KE 720x720 ===
+        if target_w is None or target_h is None:
+            target_w, target_h = _get_target_dim_720()
 
-        if random.random() < 0.7:
+        # Jika target square 720x720, crop center square dulu biar tidak stretch
+        if target_w == target_h:
+            # Crop center square dari original (misal 1200x1600 -> 1200x1200)
+            im = _crop_center_square(im)
+
+        # Resize ke target (720x720)
+        if im.size != (target_w, target_h):
+            im = im.resize((target_w, target_h), Image.LANCZOS)
+
+        w, h = im.size
+
+        # Variasi halus 1-5 pixel biar hash beda tiap upload (anti duplicate detection)
+        # Tapi jangan ubah ukuran — tetap 720x720
+        if random.random() < 0.8:
             px = im.load()
-            for _ in range(random.randint(1, 3)):
+            for _ in range(random.randint(2, 6)):
                 rx = random.randint(0, max(0, w - 1))
                 ry = random.randint(0, max(0, h - 1))
                 try:
                     r, g, b = px[rx, ry]
-                    px[rx, ry] = (min(255, r + random.randint(1, 8)), max(0, g + random.randint(-2, 3)), max(0, b + random.randint(-2, 3)))
+                    # tweak halus ±2-7 biar foto tampak natural tapi hash beda
+                    px[rx, ry] = (
+                        max(0, min(255, r + random.randint(-3, 5))),
+                        max(0, min(255, g + random.randint(-2, 4))),
+                        max(0, min(255, b + random.randint(-2, 4))),
+                    )
                 except Exception:
                     pass
 
+        # Save baseline JPEG — anti deteksi bypass:
+        # - progressive=False (kamera HP baseline, bukan progressive)
+        # - exif=b'' (kamera HP asli strip EXIF oleh app sebelum upload)
+        # - quality 82-93 (match real app, size 20-60KB untuk 720x720)
+        # - optimize=True
+        # - NO COM segment (FF FE tidak ada di kamera HP)
         out = io.BytesIO()
         q = random.randint(82, 93)
-        im.save(out, format='JPEG', quality=q, optimize=True, exif=b'')
+        im.save(
+            out,
+            format='JPEG',
+            quality=q,
+            optimize=True,
+            exif=b'',
+            progressive=False,
+        )
         data = out.getvalue()
-        return _add_com_segment(data, random.randint(8, 40)) if random.random() < 0.5 else data
+
+        # === Validasi size agar tidak terdeteksi bypass (pool gelap = size kecil) ===
+        # Target 20-60KB untuk 720x720 (audit server 14-51KB avg 27KB)
+        # Pool asli 1.jpeg mean=2 (hampir hitam) -> crop jadi 4.8KB, terlalu kecil -> flag bypass
+        # Solusi: jika size <15KB, tambahkan noise texture dan re-encode higher quality
+        if len(data) < 15000:
+            # Cek apakah image terlalu flat (low entropy)
+            try:
+                # Tambah noise halus + overlay panel meter biar detail naik
+                from PIL import ImageDraw
+                draw = ImageDraw.Draw(im)
+                # Tambah grain noise biar size naik
+                for _ in range(random.randint(8000, 15000)):
+                    x = random.randint(0, w - 1)
+                    y = random.randint(0, h - 1)
+                    nv = random.randint(-20, 25)
+                    try:
+                        r, g, b = im.getpixel((x, y))
+                        draw.point((x, y), fill=(
+                            max(0, min(255, r + nv + random.randint(-5, 8))),
+                            max(0, min(255, g + nv)),
+                            max(0, min(255, b + nv)),
+                        ))
+                    except:
+                        pass
+                out = io.BytesIO()
+                im.save(out, format='JPEG', quality=min(95, q + 10), optimize=True, exif=b'', progressive=False)
+                new_data = out.getvalue()
+                # Pakai yang lebih besar jika masih dalam batas wajar
+                if len(new_data) > len(data) and len(new_data) < 90000:
+                    data = new_data
+            except Exception:
+                pass
+
+        # Final guard: jika masih <12KB (pool corrupt), fallback ke synthetic meter 720x720
+        if len(data) < 12000:
+            # Synthetic fallback — tetap 720x720 realistic
+            synth = _rand_jpeg_via_pil(target_w, target_h, quality=random.randint(85, 92))
+            if synth and len(synth) >= 12000:
+                return synth
+            # Jika synthetic juga kecil, force high quality
+            out = io.BytesIO()
+            im.save(out, format='JPEG', quality=96, optimize=True, exif=b'', progressive=False)
+            data = out.getvalue()
+
+        # Jika terlalu besar (>80KB) untuk 720x720, turunkan quality sedikit
+        if len(data) > 80000 and target_w <= 720:
+            out = io.BytesIO()
+            im.save(out, format='JPEG', quality=max(78, q - 12), optimize=True, exif=b'', progressive=False)
+            data = out.getvalue()
+
+        return data
+
     except Exception as e:
+        # Fallback: coba baca raw dan re-encode minimal
         try:
+            from PIL import Image
             with open(path, 'rb') as f:
                 raw = f.read()
-            if raw.startswith(b'\xff\xd8'):
-                return _add_com_segment(raw, random.randint(10, 60))
             if raw.startswith(b'\x89PNG'):
-                from PIL import Image
                 im = Image.open(io.BytesIO(raw))
                 if im.mode != 'RGB':
                     im = im.convert('RGB')
+                # Crop square + resize 720x720
+                im = _crop_center_square(im)
+                tw, th = _get_target_dim_720()
+                if im.size != (tw, th):
+                    im = im.resize((tw, th), Image.LANCZOS)
                 out = io.BytesIO()
-                im.save(out, format='JPEG', quality=random.randint(82, 92))
+                im.save(out, format='JPEG', quality=random.randint(82, 92), optimize=True, exif=b'', progressive=False)
+                return out.getvalue()
+            # Jika JPEG tapi gagal diproses, coba tetap crop-resize paksa
+            if raw.startswith(b'\xff\xd8'):
+                im = Image.open(io.BytesIO(raw))
+                if im.mode != 'RGB':
+                    im = im.convert('RGB')
+                im = _crop_center_square(im)
+                tw, th = _get_target_dim_720()
+                im = im.resize((tw, th), Image.LANCZOS)
+                out = io.BytesIO()
+                im.save(out, format='JPEG', quality=random.randint(82, 92), optimize=True, exif=b'', progressive=False)
                 return out.getvalue()
         except Exception:
             pass
@@ -181,90 +339,177 @@ def _reencode_pool_image(path: str):
 
 
 def _rand_jpeg_via_pil(width=None, height=None, quality=None):
-    """Generate realistic meter panel JPEG with PIL - always valid."""
+    """
+    Fallback generate synthetic meter foto jika pool kosong.
+    Sekarang generate 720x720 square baseline (match server).
+    """
     try:
         from PIL import Image, ImageDraw
     except ImportError:
         return None
 
-    if width is None:
-        width = random.choice([800, 1024, 1280, 1280, 1440])
-    if height is None:
-        height = random.choice([600, 768, 720, 960, 900])
+    # Default 720x720 square — anti bypass detection
+    if width is None or height is None:
+        tw, th = _get_target_dim_720()
+        width, height = tw, th
     if quality is None:
-        quality = random.randint(80, 92)
+        quality = random.randint(82, 93)
 
-    base_gray = random.randint(45, 85)
-    img = Image.new("RGB", (width, height), (base_gray, base_gray, base_gray + 8))
+    # Jika masih ada request dimensions lama (misal 800x600), override ke square
+    # kecuali sudah square realistic
+    if width != height:
+        # Force square 720x720 untuk konsistensi dengan app asli
+        if random.random() < 0.85:
+            width = height = 720
+        else:
+            # Portrait 720x960 — sesuai outlier real di server
+            width, height = 720, 960
+
+    # Buat background mirip foto meter real (bukan gray noise flat)
+    # Base: panel gelap dengan sedikit texture
+    base_dark = random.randint(20, 45)
+    img = Image.new("RGB", (width, height), (base_dark, base_dark + 5, base_dark + 8))
     draw = ImageDraw.Draw(img)
 
-    for _ in range(random.randint(180, 450)):
+    # Noise texture halus (seperti sensor kamera HP)
+    for _ in range(random.randint(3000, 6000)):
         x = random.randint(0, width - 1)
         y = random.randint(0, height - 1)
-        r = random.randint(1, 2)
-        n = random.randint(-12, 18)
-        c = max(0, min(255, base_gray + n))
-        draw.ellipse([x, y, x + r, y + r], fill=(c, c, c))
+        n = random.randint(-15, 20)
+        c = max(0, min(255, base_dark + n))
+        draw.point((x, y), fill=(c, c, c + random.randint(0, 5)))
 
-    panel_w = random.randint(width // 2, width - 30)
-    panel_h = random.randint(height // 3, height - 60)
-    panel_x = random.randint(10, max(10, width - panel_w - 10))
-    panel_y = random.randint(10, max(10, height - panel_h - 10))
+    # Panel meter area (center, 70-85% dari sisi)
+    margin = width // 12
+    panel_w = random.randint(int(width * 0.7), width - margin * 2)
+    panel_h = random.randint(int(height * 0.35), int(height * 0.6))
+    panel_x = random.randint(margin, max(margin, width - panel_w - margin))
+    panel_y = random.randint(margin + height // 10, max(margin, height - panel_h - margin))
 
-    pc = (random.randint(185, 225), random.randint(185, 225), random.randint(175, 215))
+    # Panel color metallic light
+    pc_r = random.randint(185, 225)
+    pc_g = random.randint(185, 225)
+    pc_b = random.randint(175, 215)
     draw.rectangle([panel_x, panel_y, panel_x + panel_w, panel_y + panel_h],
-                   fill=pc, outline=(70, 70, 70), width=2)
+                   fill=(pc_r, pc_g, pc_b), outline=(60, 60, 60), width=2)
 
-    disp_h = max(28, panel_h // 5)
-    draw.rectangle([panel_x + 8, panel_y + 8, panel_x + panel_w - 8, panel_y + 8 + disp_h],
-                   fill=(12, 18, 12), outline=(45, 45, 45))
+    # Display hitam (LCD meter)
+    disp_h = max(35, panel_h // 4)
+    draw.rectangle([panel_x + 10, panel_y + 10, panel_x + panel_w - 10, panel_y + 10 + disp_h],
+                   fill=(8, 18, 8), outline=(35, 35, 35), width=1)
 
+    # Nilai meter fake
     fake_val = random.randint(0, 500)
-    unit = random.choice(["A", "A", "kV"])
+    unit = random.choice(["A", "A", "A", "kV"])
     try:
-        draw.text((panel_x + 14, panel_y + 12), f"{fake_val} {unit}", fill=(90, 255, 110))
+        draw.text((panel_x + 18, panel_y + 16), f"{fake_val} {unit}", fill=(70, 255, 90))
     except Exception:
         pass
 
-    for _ in range(random.randint(6, 16)):
-        bx = random.randint(panel_x + 10, panel_x + panel_w - 40)
-        by = random.randint(panel_y + disp_h + 20, panel_y + panel_h - 15)
-        bw = random.randint(18, 50)
-        bh = random.randint(10, 18)
+    # Tombol indikator
+    for _ in range(random.randint(3, 6)):
+        bx = random.randint(panel_x + 15, panel_x + panel_w - 50)
+        by = random.randint(panel_y + disp_h + 25, panel_y + panel_h - 20)
+        bw = random.randint(20, 45)
+        bh = random.randint(12, 20)
         bc = (random.randint(40, 110), random.randint(40, 110), random.randint(40, 110))
         draw.rectangle([bx, by, bx + bw, by + bh], fill=bc, outline=(0, 0, 0))
 
-    gx = random.randint(0, width // 3)
-    gy = random.randint(0, height // 3)
-    gw = random.randint(60, 180)
-    gh = random.randint(30, 90)
-    draw.ellipse([gx, gy, gx + gw, gy + gh], fill=(255, 255, 255))
+    # Glare / pantulan cahaya (realistic untuk foto meter)
+    if random.random() < 0.4:
+        gx = random.randint(0, width // 4)
+        gy = random.randint(0, height // 4)
+        gw = random.randint(50, 150)
+        gh = random.randint(20, 80)
+        draw.ellipse([gx, gy, gx + gw, gy + gh], fill=(255, 255, 255))
 
     out = io.BytesIO()
-    img.save(out, format="JPEG", quality=quality, optimize=True)
+    # Baseline JPEG, no progressive, no EXIF, quality 82-93 => 20-60KB for 720x720
+    img.save(out, format="JPEG", quality=quality, optimize=True, exif=b'', progressive=False)
     return out.getvalue()
 
 
-def rand_jpeg_bytes():
-    """Return valid JPEG bytes varying each call, server-readable."""
+def rand_jpeg_bytes(target_w: int = None, target_h: int = None):
+    """
+    Return valid JPEG bytes 720x720 square mirip app asli.
+    
+    - Ambil dari pool (photo/pool/) -> crop center square -> resize 720x720
+    - Fallback synthetic 720x720 jika pool kosong
+    - Baseline JPEG, no progressive, no COM, no EXIF
+    - Size 15-60KB (match audit server 14-51KB avg 27KB)
+    
+    Args:
+        target_w, target_h: opsional target dimensi (default 720x720)
+    
+    Returns:
+        bytes JPEG valid
+    """
+    if target_w is None or target_h is None:
+        target_w, target_h = _get_target_dim_720()
+
     pool = _get_photo_pool()
     if pool:
-        for _ in range(3):
+        # Coba 5 kali dari pool
+        for _ in range(5):
             p = random.choice(pool)
-            enc = _reencode_pool_image(p)
-            if enc and enc.startswith(b"\xff\xd8") and len(enc) > 800:
-                return enc
+            enc = _reencode_pool_image(p, target_w, target_h)
+            if enc and enc.startswith(b"\xff\xd8") and len(enc) >= 8000:
+                # Validasi dimensi
+                try:
+                    from PIL import Image
+                    im = Image.open(io.BytesIO(enc))
+                    w, h = im.size
+                    # Harus 720x720 atau 720x960 atau 1080x1080 (dalam range TARGET_DIMS)
+                    if (w, h) in [(720, 720), (720, 960), (960, 720), (1080, 1080), (1080, 1440), (1440, 1080), (1440, 1440)]:
+                        if 10000 <= len(enc) <= 100000:
+                            return enc
+                    # Tetap return jika valid JPEG meski dimensi tidak exact (fallback toleran)
+                    if len(enc) >= 10000:
+                        return enc
+                except:
+                    # Jika PIL gagal cek, tetap return jika size ok
+                    if len(enc) >= 8000:
+                        return enc
+
+        # Fallback: baca raw dan crop paksa ke 720x720
         try:
-            with open(random.choice(pool), "rb") as f:
-                return f.read()
+            from PIL import Image
+            raw_path = random.choice(pool)
+            with open(raw_path, 'rb') as f:
+                raw = f.read()
+            if raw.startswith(b'\xff\xd8') and len(raw) >= 5000:
+                im = Image.open(io.BytesIO(raw))
+                if im.mode != 'RGB':
+                    im = im.convert('RGB')
+                im = _crop_center_square(im)
+                im = im.resize((target_w, target_h), Image.LANCZOS)
+                out = io.BytesIO()
+                im.save(out, format='JPEG', quality=random.randint(82, 93), optimize=True, exif=b'', progressive=False)
+                data = out.getvalue()
+                if len(data) >= 10000:
+                    return data
         except Exception:
             pass
 
-    for _ in range(3):
-        gen = _rand_jpeg_via_pil()
-        if gen and gen.startswith(b"\xff\xd8") and len(gen) > 800:
+    # Fallback synthetic 720x720
+    for _ in range(5):
+        gen = _rand_jpeg_via_pil(target_w, target_h)
+        if gen and gen.startswith(b"\xff\xd8") and len(gen) >= 8000:
             return gen
 
+    # Last fallback: minimal 720x720 valid JPEG (1x1 dummy di-expand ke 720x720 gray)
+    # Ini seharusnya tidak terjadi jika pool ada, tapi safety
+    try:
+        from PIL import Image
+        img = Image.new('RGB', (target_w, target_h), (random.randint(30, 60), random.randint(30, 60), random.randint(35, 65)))
+        out = io.BytesIO()
+        img.save(out, format='JPEG', quality=85, optimize=True, exif=b'', progressive=False)
+        return out.getvalue()
+    except:
+        pass
+
+    # Ultimate fallback: old 1x1 + expand via COM (legacy, tapi tetap valid JPEG)
+    # Dengan catatan ini akan terdeteksi sebagai bypass jika masih dipakai — jadi log warning
     base = bytes([
         0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
         0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,
@@ -273,8 +518,8 @@ def rand_jpeg_bytes():
         0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D, 0x1A, 0x1C, 0x1C, 0x20,
         0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28, 0x37, 0x29,
         0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32,
-        0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01,
-        0x00, 0x01, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00, 0x1F, 0x00, 0x00,
+        0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x02, 0xD0,
+        0x02, 0xD0, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00, 0x1F, 0x00, 0x00,
         0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
         0x09, 0x0A, 0x0B, 0xFF, 0xC4, 0x00, 0xB5, 0x10, 0x00, 0x02, 0x01, 0x03,
@@ -296,17 +541,21 @@ def rand_jpeg_bytes():
         0x00, 0x00, 0x3F, 0x00, 0x7B, 0x94, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00,
         0xFF, 0xD9
     ])
-    return _add_com_segment(base, random.randint(12, 80))
+    return base
 
 
-def rand_jpeg_pair():
-    """Two different valid JPEGs for tegangan."""
+def rand_jpeg_pair(target_w: int = None, target_h: int = None):
+    """Two different valid JPEGs 720x720 untuk tegangan (HV + MV)."""
+    if target_w is None or target_h is None:
+        target_w, target_h = _get_target_dim_720()
+
     for _ in range(10):
-        j1 = rand_jpeg_bytes()
-        j2 = rand_jpeg_bytes()
+        j1 = rand_jpeg_bytes(target_w, target_h)
+        j2 = rand_jpeg_bytes(target_w, target_h)
         if j1 != j2 and hashlib.sha256(j1).hexdigest() != hashlib.sha256(j2).hexdigest():
             return j1, j2
-    return rand_jpeg_bytes(), rand_jpeg_bytes()
+    # fallback pair dengan variasi dimensi ringan jika tetap sama
+    return rand_jpeg_bytes(target_w, target_h), rand_jpeg_bytes(target_w, target_h)
 
 
 # ============================================================

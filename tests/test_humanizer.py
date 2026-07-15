@@ -224,22 +224,74 @@ def test_jpeg_bytes_varying_and_realistic_size():
     sizes = []
     for _ in range(20):
         j = hu.rand_jpeg_bytes()
-        assert len(j) > 1000, f"too small like dummy 172b: {len(j)}"
+        # Anti bypass: foto dari pool harus 720x720 square, size 12KB+ (bukan 172b dummy, bukan 4KB dark)
+        # Audit server: stored 14-51KB avg 27KB. Upload kita target 15-70KB.
+        assert len(j) >= 12000, f"too small, bypass signature (<12KB): {len(j)}"
         assert j[:2] == b"\xff\xd8", "not JPEG"
         assert j[-2:] == b"\xff\xd9" or b"\xff\xd9" in j[-10:], "no JPEG footer"
         hashes.add(hashlib.sha256(j).hexdigest())
         sizes.append(len(j))
     assert len(hashes) >= 15, f"hashes not varying: {len(hashes)}"
-    assert max(sizes) - min(sizes) > 500, "size not varying"
-    assert max(sizes) < 300_000, "too large"
+    assert max(sizes) - min(sizes) > 1000, "size not varying enough"
+    assert max(sizes) < 150_000, "too large, wasteful"
+    assert min(sizes) >= 12000, f"min size too small, bypass signature: {min(sizes)}"
+
+
+def test_jpeg_bytes_720x720_dimension():
+    """Audit server: stored 720x720 (95%) / 720x960 (5%). Upload harus square 720x720 dominant."""
+    from PIL import Image
+    import io
+    dims = []
+    for _ in range(20):
+        j = hu.rand_jpeg_bytes()
+        im = Image.open(io.BytesIO(j))
+        w, h = im.size
+        dims.append((w, h))
+        # Harus dalam whitelist target dims (720x720 dominan)
+        assert (w, h) in [(720, 720), (720, 960), (960, 720), (1080, 1080), (1080, 1440), (1440, 1080), (1440, 1440)], f"unexpected dim {w}x{h}"
+        assert w >= 720 and h >= 720, f"too small dim {w}x{h}, should be >=720"
+        # Anti progressive (kamera HP baseline)
+        assert b"\xff\xc2" not in j[:1000], "progressive JPEG detected (FFC2), kamera HP biasanya baseline"
+        # Anti COM segment (FF FE) — signature bypass lama
+        assert b"\xff\xfe" not in j, "COM segment FF FE detected, signature bypass"
+        # EXIF harus kosong (app strip EXIF)
+        assert len(im.getexif()) == 0, "EXIF should be empty (app strips EXIF)"
+        # Baseline, bukan progressive
+        assert not im.info.get("progressive") and not im.info.get("progression"), "progressive flag in info"
+
+    # Dominan harus 720x720
+    count_720 = sum(1 for w, h in dims if w == 720 and h == 720)
+    assert count_720 >= 8, f"dominant should be 720x720, got {count_720}/20"
 
 
 def test_jpeg_pair_different():
     import hashlib
     for _ in range(10):
         j1, j2 = hu.rand_jpeg_pair()
-        assert len(j1) > 1000 and len(j2) > 1000
+        assert len(j1) >= 12000 and len(j2) >= 12000, f"pair too small: {len(j1)}, {len(j2)}"
         assert hashlib.sha256(j1).hexdigest() != hashlib.sha256(j2).hexdigest()
+
+
+def test_jpeg_pool_crop_square():
+    """Foto dari pool (1200x1600) harus di-crop center square jadi 720x720"""
+    import os
+    import io
+    from PIL import Image
+    pool_dir = os.path.join(ROOT, "photo", "pool")
+    if os.path.isdir(pool_dir):
+        # Pool ada, test crop
+        for _ in range(5):
+            j = hu.rand_jpeg_bytes()
+            im = Image.open(io.BytesIO(j))
+            w, h = im.size
+            # Jika dari pool 1200x1600, setelah crop square harus 720x720 atau varian square
+            assert w >= 720 and h >= 720, f"pool crop too small {w}x{h}"
+            # Jika square, aspect 1:1 atau 3:4
+            aspect = w / h
+            assert 0.7 <= aspect <= 1.5, f"aspect ratio out of realistic range {aspect} for {w}x{h}"
+    else:
+        j = hu.rand_jpeg_bytes()
+        assert len(j) > 0
 
 
 def test_jpeg_pool_optional():
@@ -247,7 +299,7 @@ def test_jpeg_pool_optional():
     pool_dir = os.path.join(ROOT, "photo", "pool")
     if os.path.isdir(pool_dir):
         j = hu.rand_jpeg_bytes()
-        assert len(j) > 1000
+        assert len(j) >= 12000
     else:
         j = hu.rand_jpeg_bytes()
         assert len(j) > 0
@@ -257,3 +309,4 @@ def test_no_dummy_172_bytes():
     for _ in range(20):
         j = hu.rand_jpeg_bytes()
         assert len(j) != 172, "still returning old dummy size"
+        assert len(j) >= 12000, f"too small, bypass: {len(j)}"
