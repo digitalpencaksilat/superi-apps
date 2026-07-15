@@ -28,27 +28,63 @@ except Exception:
     hu = None
 
 
-def _h_durasi():
-    return hu.rand_durasi() if hu else 0.1
-
-
-def _h_foto_date(date_str, periode):
-    return hu.rand_foto_datetime(date_str, periode) if hu else f"{date_str}T{periode:02d}:00:00.000Z"
-
-
-def _h_foto_pair(date_str, periode):
+def _h_durasi(data_type="beban-penyulang"):
     if hu:
-        return hu.rand_foto_pair(date_str, periode)
+        return hu.rand_durasi_for_type(data_type)
+    import random as _r
+    if "tegangan" in data_type:
+        return round(_r.uniform(8.0, 35.0) / 60.0, 8)
+    return round(_r.uniform(2.0, 7.0) / 60.0, 8)
+
+
+def _h_foto_date(date_str, periode, durasi_min=None, data_type="beban-penyulang"):
+    if hu:
+        return hu.rand_foto_datetime(date_str, periode, durasi_min)
+    return f"{date_str}T{periode:02d}:00:00.000Z"
+
+
+def _h_foto_pair(date_str, periode, durasi_min=None):
+    if hu:
+        return hu.rand_foto_pair(date_str, periode, durasi_min)
     ts = f"{date_str}T{periode:02d}:00:00.000Z"
     return ts, ts
+
+
+def _h_foto_dict(date_str, periode, durasi_min=None, data_type="beban-penyulang"):
+    if hu:
+        return hu.rand_foto_dict(data_type=data_type, date_str=date_str, periode=periode, durasi_min=durasi_min)
+    import random as _r
+    base_addr = "Jl. Swadaya 1 No.36, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia"
+    return {"date": _h_foto_date(date_str, periode, durasi_min, data_type), "address": base_addr, "latitude": -6.213095 + _r.uniform(-0.00008, 0.00008), "longitude": 106.846073 + _r.uniform(-0.00008, 0.00008)}
+
+
+def _h_foto_pair_dicts(date_str, periode, durasi_min=None):
+    if hu:
+        return hu.rand_foto_pair_dicts(date_str, periode, durasi_min)
+    ts1, ts2 = _h_foto_pair(date_str, periode, durasi_min)
+    base = "Jl. Swadaya 1 No.36, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia"
+    return (
+        {"date": ts1, "address": base, "latitude": -6.213095, "longitude": 106.846073},
+        {"date": ts2, "address": base, "latitude": -6.213098, "longitude": 106.846075},
+    )
 
 
 def _h_boundary():
     return hu.rand_boundary() if hu else BOUNDARY
 
 
-def _h_filename(foto_ts, idx=0):
-    return hu.rand_filename(foto_ts, idx=idx) if hu else f"foto{idx + 1}.jpg"
+def _h_filename(foto_ts, idx=0, data_type="beban-penyulang", subtype=None):
+    if hu:
+        return hu.rand_filename(foto_ts, idx=idx, data_type=data_type, subtype=subtype)
+    import uuid as _uuid
+    date_part = (foto_ts or "")[:10] or "2026-07-15"
+    hex16 = _uuid.uuid4().hex[:16]
+    if "tegangan" in data_type:
+        pref = f"foto{subtype or ('MV' if idx==1 else 'HV')}"
+        return f"{pref}_{date_part}_{hex16[:12]}.jpg"
+    elif "beban-trafo" in data_type:
+        return f"fotoBebanTrafo_{date_part}_{hex16}.jpg"
+    return f"fotoBebanPenyulang_{date_part}_{hex16}.jpg"
 
 
 def _h_user_agent():
@@ -381,6 +417,14 @@ def learn_pattern(token, gi_id, data_type, item_id, days_back=None):
 
     return result
 
+def _infer_data_type_from_path_web(path: str) -> str:
+    if "tegangan" in path:
+        return "tegangan-trafo"
+    if "beban-trafo" in path:
+        return "beban-trafo"
+    return "beban-penyulang"
+
+
 def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photos):
     """POST multipart request with humanized filename/boundary/UA and varying JPEG bytes."""
     try:
@@ -388,6 +432,7 @@ def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photo
         inner = json.dumps(data_dict)
         bd = _h_boundary()
         foto_ts = data_dict.get("foto", {}).get("date") or data_dict.get("fotoHV", {}).get("date")
+        data_type_hint = _infer_data_type_from_path_web(path)
 
         if hu:
             if num_photos > 1:
@@ -402,11 +447,14 @@ def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photo
         for i in range(num_photos):
             if i == 1 and data_dict.get("fotoMV", {}).get("date"):
                 fn_ts = data_dict["fotoMV"]["date"]
+                subtype = "MV"
             elif i == 0 and data_dict.get("fotoHV", {}).get("date"):
                 fn_ts = data_dict["fotoHV"]["date"]
+                subtype = "HV"
             else:
                 fn_ts = foto_ts
-            fname = _h_filename(fn_ts, idx=i)
+                subtype = None
+            fname = _h_filename(fn_ts, idx=i, data_type=data_type_hint, subtype=subtype)
             fbytes = jpeg_pool[i % len(jpeg_pool)] if hu else file_bytes
             body_parts.append(f'--{bd}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fname}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
             body_parts.append(fbytes if isinstance(fbytes, bytes) else file_bytes)
@@ -597,6 +645,7 @@ def api_input():
         value_field = "beban"
     
     dt = datetime.strptime(date_str, "%Y-%m-%d")
+    durasi = _h_durasi(data_type)
     body_data = {
         id_field: item_id,
         "timezone": "Asia/Jakarta",
@@ -604,17 +653,17 @@ def api_input():
         "tanggal": dt.day,
         "bulan": dt.month - 1,
         "tahun": dt.year,
-        "durasi": _h_durasi(),
+        "durasi": durasi,
         value_field: mv if data_type == "tegangan-trafo" else value,
     }
 
     if data_type == "tegangan-trafo":
-        ts1, ts2 = _h_foto_pair(date_str, periode)
+        fotoHV, fotoMV = _h_foto_pair_dicts(date_str, periode, durasi)
         body_data["hv"] = hv
-        body_data["fotoHV"] = {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-        body_data["fotoMV"] = {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        body_data["fotoHV"] = fotoHV
+        body_data["fotoMV"] = fotoMV
     else:
-        body_data["foto"] = {"date": _h_foto_date(date_str, periode), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        body_data["foto"] = _h_foto_dict(date_str, periode, durasi, data_type)
     
     status, result = api_post_multipart(token, endpoint, body_data, DUMMY_JPEG, file_field, num_photos)
     
@@ -726,6 +775,7 @@ def api_batch_input():
                 continue
             
             dt = datetime.strptime(date_str, "%Y-%m-%d")
+            durasi = _h_durasi(data_type)
             body_data = {
                 id_field: item_id,
                 "timezone": "Asia/Jakarta",
@@ -733,18 +783,18 @@ def api_batch_input():
                 "tanggal": dt.day,
                 "bulan": dt.month - 1,
                 "tahun": dt.year,
-                "durasi": _h_durasi(),
+                "durasi": durasi,
             }
 
             if data_type == "tegangan-trafo":
-                ts1, ts2 = _h_foto_pair(date_str, periode)
+                fotoHV, fotoMV = _h_foto_pair_dicts(date_str, periode, durasi)
                 body_data["mv"] = it.get("mv")
                 body_data["hv"] = it.get("hv")
-                body_data["fotoHV"] = {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-                body_data["fotoMV"] = {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+                body_data["fotoHV"] = fotoHV
+                body_data["fotoMV"] = fotoMV
             else:
                 body_data["beban"] = it.get("value")
-                body_data["foto"] = {"date": _h_foto_date(date_str, periode), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+                body_data["foto"] = _h_foto_dict(date_str, periode, durasi, data_type)
 
             status, result = api_post_multipart(token, endpoint, body_data, DUMMY_JPEG, file_field, num_photos)
             if result.get("success"):
@@ -784,6 +834,7 @@ def api_batch_input():
                 continue
 
             dt = datetime.strptime(date_str, "%Y-%m-%d")
+            durasi = _h_durasi(data_type)
             body_data = {
                 id_field: item_id,
                 "timezone": "Asia/Jakarta",
@@ -791,18 +842,18 @@ def api_batch_input():
                 "tanggal": dt.day,
                 "bulan": dt.month - 1,
                 "tahun": dt.year,
-                "durasi": _h_durasi(),
+                "durasi": durasi,
             }
 
             if data_type == "tegangan-trafo":
-                ts1, ts2 = _h_foto_pair(date_str, periodo)
+                fotoHV, fotoMV = _h_foto_pair_dicts(date_str, periodo, durasi)
                 body_data["mv"] = p.get("mv")
                 body_data["hv"] = p.get("hv")
-                body_data["fotoHV"] = {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-                body_data["fotoMV"] = {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+                body_data["fotoHV"] = fotoHV
+                body_data["fotoMV"] = fotoMV
             else:
                 body_data["beban"] = p.get("value")
-                body_data["foto"] = {"date": _h_foto_date(date_str, periodo), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+                body_data["foto"] = _h_foto_dict(date_str, periodo, durasi, data_type)
 
             status, result = api_post_multipart(token, endpoint, body_data, DUMMY_JPEG, file_field, num_photos)
             if result.get("success"):
@@ -1745,22 +1796,23 @@ def api_scripting_input():
     }
     ep = endpoint_map[data_type]
     dt = datetime.strptime(date_str, "%Y-%m-%d")
+    durasi = _h_durasi(data_type)
 
     body_data = {
         ep[3]: item_id,
         "timezone": "Asia/Jakarta",
         "periode": periode,
         "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year,
-        "durasi": _h_durasi(),
+        "durasi": durasi,
         ep[4]: data.get("value") if data_type != "tegangan-trafo" else data.get("mv"),
     }
     if data_type == "tegangan-trafo":
-        ts1, ts2 = _h_foto_pair(date_str, periode)
+        fotoHV, fotoMV = _h_foto_pair_dicts(date_str, periode, durasi)
         body_data["hv"] = data.get("hv")
-        body_data["fotoHV"] = {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-        body_data["fotoMV"] = {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        body_data["fotoHV"] = fotoHV
+        body_data["fotoMV"] = fotoMV
     else:
-        body_data["foto"] = {"date": _h_foto_date(date_str, periode), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        body_data["foto"] = _h_foto_dict(date_str, periode, durasi, data_type)
 
     status, result = api_post_multipart(token, ep[0], body_data, DUMMY_JPEG, ep[1], ep[2])
     if result.get("success"):

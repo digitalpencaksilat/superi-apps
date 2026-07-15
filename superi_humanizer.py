@@ -3,9 +3,11 @@
 SUPER-I Humanizer — anti-robot behaviour layer (stdlib only).
 
 Menyamarkan perilaku input agar mirip aplikasi mobile asli:
-- durasi random (ganti hardcoded 0.1 / 0.001)
-- foto.datetime random menit/detik/ms dalam jam periode (bukan 00:00.000Z)
-- filename mirip kamera HP Android / Expo ImagePicker (korelasi dengan foto datetime)
+- durasi random dalam MENIT (unit server), mewakili 2-7 detik untuk beban, 8-40 detik untuk tegangan
+  (manual avg: beban 0.105 menit=6.35s, tegangan 0.305 menit=18.3s)
+- foto.datetime random menit/detik/ms dalam jam periode (bukan 00:00.000Z), korelasi dengan durasi
+- filename mirip app asli: fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg, fotoBebanTrafo_, fotoHV_, fotoMV_
+- foto.address + lat/lon realistis (13 alamat GI MANGGARAI area + jitter 5-15m), bukan "GI MANGGARAI" statis
 - boundary multipart random
 - sleep seperti manusia + shuffle urutan
 
@@ -31,7 +33,11 @@ _USER_AGENTS = [
     _DALVIK_UA,
 ]
 
-_FORBIDDEN_DURASI = {0.1, 0.001, 0.0}
+# Durasi server disimpan dalam MENIT (bukan detik).
+# Manual: beban 0.057-2.1 menit, avg 0.105 menit = 6.35 detik.
+#         tegangan 0.14-1.02 menit, avg 0.305 menit = 18.3 detik.
+# Forbidden kalau 0.0 (jangan pernah kirim nol)
+_FORBIDDEN_DURASI = {0.0}
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PHOTO_POOL_DIR = os.path.join(_SCRIPT_DIR, "photo", "pool")
@@ -40,6 +46,39 @@ _JPEG_CACHE = {}
 _WIB = timezone(timedelta(hours=7))
 _UTC = timezone.utc
 
+# ============================================================
+# REAL LOCATIONS - dari API manual (13 alamat unik di sekitar GI MANGGARAI)
+# Lat/Lon jitter akan ditambahkan ±5-15m agar tidak statis
+# ============================================================
+_REAL_LOCATIONS = [
+    # alamat lengkap, lat, lon
+    ("Jl. Swadaya 1 No.36, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia", -6.213095, 106.846073),
+    ("Gis 150 Kv Manggarai, Jl. Swadaya 1 No.21, RT.12/RW.10, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia", -6.213208, 106.845899),
+    ("Jl. Swadaya 1 No.38, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia", -6.213110, 106.846055),
+    ("Jl. Swadaya 1 No.6A, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia", -6.213235, 106.845678),
+    ("Jl. Swadaya IV No.20, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia", -6.213078, 106.845978),
+    ("Jln. Poltangan raya Jl. Swadaya 1 No.36, RT.7/RW.10, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia", -6.213090, 106.845980),
+    ("Jl. Dr. Saharjo No.57, RT.16/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12860, Indonesia", -6.213200, 106.846000),
+    ("Jl. Dr. Saharjo No.69 3, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia", -6.213150, 106.846020),
+    ("QRPW+V8P, Jl. Swadaya 1, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia", -6.213120, 106.846010),
+    ("Jl. Swadaya 1 No.69, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia", -6.213140, 106.845950),
+    ("Jl. Swadaya 1 No.36, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia", -6.213098, 106.846077),  # duplicate sengaja untuk weight
+    # Variasi koordinat "Lat=-6.213..., Long=..." kadang muncul di manual (tanpa alamat jalan)
+    # Representasikan sebagai alamat jalan terdekat dengan koordinat tersebut
+]
+
+# Alamat fallback "Lat=..., Long=..." style (5% chance) - beberapa entry manual pakai format ini
+_LAT_LONG_ADDRESSES = [
+    "Lat=-6.2130958, Long=106.8460737",
+    "Lat=-6.2130893, Long=106.8460603",
+    "Lat=-6.2130784, Long=106.8459783",
+    "Lat=-6.2130717, Long=106.8459829",
+    "Lat=-6.2135789, Long=106.8449406",
+]
+
+# ============================================================
+# JPEG HANDLING
+# ============================================================
 
 def _get_photo_pool():
     """Pool of real operator sample photos in photo/pool/ - supports jpg/jpeg/png."""
@@ -207,15 +246,7 @@ def _rand_jpeg_via_pil(width=None, height=None, quality=None):
 
 
 def rand_jpeg_bytes():
-    """Return valid JPEG bytes varying each call, server-readable.
-
-    Priority:
-    1. photo/pool/*.jpg exists -> re-encode via PIL to vary hash but keep valid.
-    2. Generate synthetic via PIL (valid JPEG).
-    3. Fallback minimal valid JPEG with COM segment varying (valid).
-
-    All results start with FF D8 and end with FF D9, PIL can open.
-    """
+    """Return valid JPEG bytes varying each call, server-readable."""
     pool = _get_photo_pool()
     if pool:
         for _ in range(3):
@@ -278,23 +309,161 @@ def rand_jpeg_pair():
     return rand_jpeg_bytes(), rand_jpeg_bytes()
 
 
+# ============================================================
+# DURASI - UNIT SERVER ADALAH MENIT (bukan detik)
+# Manual: beban avg 0.105 menit = 6.35 detik (2-7 detik realistic)
+#         tegangan avg 0.305 menit = 18.3 detik (8-40 detik)
+# ============================================================
+
+def _sec_to_min(sec: float) -> float:
+    """Konversi detik ke menit (unit server)."""
+    return round(sec / 60.0, 8)
+
+
 def rand_durasi() -> float:
-    """Durasi random 2.00-7.00 detik, 2 angka belakang koma (mis 2.81, 5.67)."""
-    while True:
-        v = round(random.uniform(2.0, 7.0), 2)
-        if len(str(v).split(".")[-1]) == 1:
-            v = round(v + 0.01, 2)
-        if v not in _FORBIDDEN_DURASI and 2.0 <= v <= 7.0:
-            return v
+    """
+    Durasi beban penyulang/trafo: 2.00-7.00 detik, dikembalikan dalam MENIT.
+    Contoh: 3.91 detik -> 0.06516666 menit -> server akan display 3.91 detik
+    Manual: min 0.057, max 2.14, avg 0.105 menit = 6.35 detik
+    """
+    # Weighted: lebih sering di 3-6 detik, jarang di edge
+    if random.random() < 0.7:
+        sec = random.uniform(2.5, 6.5)
+    else:
+        sec = random.uniform(2.0, 7.0)
+    sec = round(sec, 2)
+    # Pastikan 2 decimal places (mis 2.81, 5.67)
+    if len(str(sec).split(".")[-1]) == 1:
+        sec = round(sec + 0.01, 2)
+    menit = _sec_to_min(sec)
+    if menit in _FORBIDDEN_DURASI or menit == 0.0:
+        return rand_durasi()
+    return menit
+
+
+def rand_durasi_trafo() -> float:
+    """Durasi beban trafo: mirip beban penyulang (2-7 detik) -> menit."""
+    return rand_durasi()
+
+
+def rand_durasi_tegangan() -> float:
+    """
+    Durasi tegangan trafo: butuh 2 foto (HV+MV), jadi lebih lama: 8-35 detik -> menit.
+    Manual tegangan: min 0.146 (8.8s), max 1.02 (61s), avg 0.305 (18.3s)
+    """
+    if random.random() < 0.6:
+        sec = random.uniform(10.0, 25.0)  # common 10-25s
+    else:
+        sec = random.uniform(8.0, 38.0)
+    sec = round(sec, 2)
+    menit = _sec_to_min(sec)
+    if menit == 0.0:
+        return rand_durasi_tegangan()
+    return menit
 
 
 def rand_durasi_fast() -> float:
-    """Variant burst tetap 2-5 detik biar tetap masuk akal."""
-    while True:
-        v = round(random.uniform(2.0, 5.0), 2)
-        if v not in _FORBIDDEN_DURASI:
-            return v
+    """Variant cepat untuk burst: 2-5 detik -> menit."""
+    sec = round(random.uniform(2.0, 5.0), 2)
+    return _sec_to_min(sec)
 
+
+def rand_durasi_for_type(data_type: str) -> float:
+    """Helper: pilih durasi sesuai tipe data."""
+    if "tegangan" in data_type:
+        return rand_durasi_tegangan()
+    return rand_durasi()
+
+
+# ============================================================
+# LOKASI REALISTIS
+# ============================================================
+
+def _jitter_coord(base: float, meters: int = 10) -> float:
+    """Jitter koordinat ±meters (1 degree ~111km)."""
+    # 0.00001 degree ~ 1.11m
+    jitter_deg = (meters / 111000.0) * random.uniform(-1, 1)
+    return round(base + jitter_deg, 7)
+
+
+def rand_location():
+    """
+    Return (address, latitude, longitude) realistis seperti manual.
+    5% chance alamat format Lat=..., Long=...
+    Lat/lon jitter ±5-15m.
+    """
+    # 5% chance pakai format Lat/Long mentah
+    if random.random() < 0.05:
+        base = random.choice(_REAL_LOCATIONS)
+        lat = _jitter_coord(base[1], meters=random.randint(5, 15))
+        lon = _jitter_coord(base[2], meters=random.randint(5, 15))
+        addr = f"Lat={lat:.7f}, Long={lon:.7f}"
+        return addr, lat, lon
+
+    addr, base_lat, base_lon = random.choice(_REAL_LOCATIONS)
+    lat = _jitter_coord(base_lat, meters=random.randint(5, 15))
+    lon = _jitter_coord(base_lon, meters=random.randint(5, 15))
+
+    # Kadang alamat sedikit variasi: nomor jalan ±1, RT/RW ±1
+    if random.random() < 0.15:
+        # variasi nomor
+        import re
+        # contoh: No.36 -> No.37
+        def repl_no(m):
+            try:
+                num = int(m.group(1))
+                return f"No.{num + random.choice([-1, 0, 1])}"
+            except:
+                return m.group(0)
+        addr_varied = re.sub(r"No\.(\d+)", repl_no, addr)
+        # kalau berubah, pakai yang variasi
+        if addr_varied != addr and random.random() < 0.5:
+            addr = addr_varied
+
+    return addr, lat, lon
+
+
+def rand_foto_dict(
+    data_type: str = "beban-penyulang",
+    date_str: str = None,
+    periode: int = None,
+    durasi_min: float = None,
+    subtype: str = None,
+):
+    """
+    Return dict foto lengkap: {date, address, latitude, longitude}
+    - date: ISO8601 UTC, korelasi dengan durasi (now - durasi - buffer)
+    - address/lat/lon: realistis
+    Kwargs order: data_type, date_str, periode, durasi_min, subtype (backward compat positional handled)
+    """
+    # Backward-compat: if second positional was actually date_str (when called as old signature)
+    # Detect if subtype looks like a date string YYYY-MM-DD
+    if subtype is None and date_str is not None and isinstance(date_str, str) and len(date_str) == 10 and date_str[4] == "-":
+        # called with (data_type, date_str, periode, durasi) misuse? Actually our old had (data_type, subtype, date_str, periode, durasi)
+        # If subtype is None and date_str is date, fine.
+        pass
+
+    if date_str is None or periode is None:
+        # fallback to today
+        date_str = date_str or datetime.now(_WIB).strftime("%Y-%m-%d")
+        periode = periode if periode is not None else 12
+
+    foto_date = rand_foto_datetime(date_str, periode, durasi_min)
+    addr, lat, lon = rand_location()
+    return {"date": foto_date, "address": addr, "latitude": lat, "longitude": lon}
+
+
+def rand_foto_dict_compat(*args, **kwargs):
+    """Legacy wrapper to handle old positional order."""
+    # old order: data_type, subtype, date_str, periode, durasi
+    # new order: data_type, date_str, periode, durasi, subtype
+    # We try to detect.
+    return rand_foto_dict(**kwargs)
+
+
+# ============================================================
+# FOTO DATETIME - KORELASI DENGAN DURASI
+# ============================================================
 
 def _rand_minute_second_ms():
     mm = random.randint(2, 54)
@@ -313,48 +482,114 @@ def _local_period_datetime(date_str: str, periode: int) -> datetime:
     return datetime(date.year, date.month, date.day, periode, mm, ss, ms * 1000, tzinfo=_WIB)
 
 
-def rand_foto_datetime(date_str: str, periode: int) -> str:
-    """Foto datetime realistis sesuai waktu sekarang (WIB).
+def rand_foto_datetime(date_str: str, periode: int, durasi_min: float = None) -> str:
+    """Foto datetime realistis, korelasi dengan durasi jika disediakan.
 
-    - Jika date_str == hari ini: pakai jam periode tapi menit/detik dekat waktu sekarang (now - 20..180 detik), anti future.
-    - Jika date_str historis: random menit/detik dalam jam periode (lama).
+    - Jika date_str == hari ini DAN durasi_min ada:
+        foto.date = now - (durasi*60 detik + buffer 0.5-2.5 detik)
+        -> konsisten: durasi 4 detik berarti foto diambil 4 detik lalu
+    - Jika date_str == hari ini tanpa durasi:
+        foto = now - random(2, 12) detik (cepat)
+    - Jika date_str historis:
+        random menit/detik dalam jam periode
     Format: YYYY-MM-DDTHH:MM:SS.mmmZ
     """
     safe_periode = max(0, min(23, int(periode)))
     now = datetime.now(_WIB)
     today_str = now.strftime("%Y-%m-%d")
 
+    # Hitung durasi detik untuk korelasi
+    durasi_sec = None
+    if durasi_min is not None:
+        try:
+            durasi_sec = float(durasi_min) * 60.0
+        except:
+            durasi_sec = None
+
     if date_str == today_str:
-        if safe_periode >= now.hour:
-            capture = now - timedelta(seconds=random.randint(20, 180))
+        if durasi_sec is not None and durasi_sec > 0:
+            # Korelasi: foto diambil durasi + buffer lalu
+            buffer = random.uniform(0.5, 2.8)
+            total_offset = durasi_sec + buffer
+            # Clamp: jangan lebih dari 90 detik lalu untuk hari ini
+            total_offset = min(total_offset, 85.0)
+            capture = now - timedelta(seconds=total_offset, milliseconds=random.randint(50, 900))
         else:
-            capture = _local_period_datetime(date_str, safe_periode)
+            # Fallback minimal: 2-12 detik lalu untuk P>=now, atau random dalam jam untuk P<now
+            if safe_periode >= now.hour:
+                capture = now - timedelta(seconds=random.uniform(2.0, 12.0), milliseconds=random.randint(50, 900))
+            else:
+                capture = _local_period_datetime(date_str, safe_periode)
     else:
         capture = _local_period_datetime(date_str, safe_periode)
+
     return _format_utc(capture)
 
 
-def rand_foto_pair(date_str: str, periode: int):
-    """Dua timestamp HV/MV, selisih 12-45 detik, keduanya dekat waktu sekarang kalau hari ini."""
+def rand_foto_pair(date_str: str, periode: int, durasi_min: float = None):
+    """Dua timestamp HV/MV, korelasi dengan durasi.
+
+    - Jika durasi ada: first = now - durasi - buffer, second = first + 12-40 detik (HV->MV)
+    - Selisih HV-MV 12-40 detik realistis (manual)
+    - Keduanya dekat now untuk hari ini (max 45 detik lalu)
+    """
     safe_periode = max(0, min(23, int(periode)))
     now = datetime.now(_WIB)
     today_str = now.strftime("%Y-%m-%d")
 
+    durasi_sec = None
+    if durasi_min is not None:
+        try:
+            durasi_sec = float(durasi_min) * 60.0
+        except:
+            durasi_sec = None
+
     if date_str == today_str:
-        if safe_periode >= now.hour:
-            first = now - timedelta(seconds=random.randint(60, 220))
+        if durasi_sec is not None and durasi_sec > 0:
+            buffer = random.uniform(0.8, 3.0)
+            total_offset = durasi_sec + buffer
+            total_offset = min(total_offset, 90.0)
+            first = now - timedelta(seconds=total_offset, milliseconds=random.randint(50, 900))
         else:
-            first = _local_period_datetime(date_str, safe_periode)
-        delta = random.randint(12, 45)
-        second = first + timedelta(seconds=delta)
+            # fallback: 8-20 detik lalu
+            first = now - timedelta(seconds=random.uniform(8.0, 22.0), milliseconds=random.randint(50, 900))
+
+        # Jika periode sudah lewat (safe_periode < now.hour), pakai jam tersebut tapi tetap dekat
+        if safe_periode < now.hour:
+            # 70% chance pakai jam historis, 30% pakai now-based (biar variasi)
+            if random.random() < 0.7:
+                first = _local_period_datetime(date_str, safe_periode)
+
+        delta = random.randint(12, 42)
+        second = first + timedelta(seconds=delta, milliseconds=random.randint(80, 850))
         if second >= now:
-            second = now - timedelta(seconds=random.randint(5, 15))
+            second = now - timedelta(seconds=random.uniform(2.0, 8.0))
             first = second - timedelta(seconds=delta)
     else:
         first = _local_period_datetime(date_str, safe_periode)
-        delta = random.randint(12, 85)
-        second = first + timedelta(seconds=delta)
+        delta = random.randint(12, 55)
+        second = first + timedelta(seconds=delta, milliseconds=random.randint(80, 850))
+
     return _format_utc(first), _format_utc(second)
+
+
+def rand_foto_pair_dicts(date_str: str, periode: int, durasi_min: float = None):
+    """Return (fotoHV dict, fotoMV dict) lengkap dengan lokasi realistis."""
+    ts1, ts2 = rand_foto_pair(date_str, periode, durasi_min)
+    # HV dan MV lokasi bisa sedikit berbeda (orang jalan 2-5 meter antar foto)
+    addr1, lat1, lon1 = rand_location()
+    # MV lokasi dekat HV tapi jitter lagi
+    if random.random() < 0.7:
+        # dekat HV
+        lat2 = _jitter_coord(lat1, meters=random.randint(2, 6))
+        lon2 = _jitter_coord(lon1, meters=random.randint(2, 6))
+        addr2 = addr1  # alamat sama
+    else:
+        addr2, lat2, lon2 = rand_location()
+
+    fotoHV = {"date": ts1, "address": addr1, "latitude": lat1, "longitude": lon1}
+    fotoMV = {"date": ts2, "address": addr2, "latitude": lat2, "longitude": lon2}
+    return fotoHV, fotoMV
 
 
 def rand_boundary() -> str:
@@ -363,52 +598,58 @@ def rand_boundary() -> str:
     return f"{_BASE_BOUNDARY_PREFIX}{rand}"
 
 
-def rand_filename(foto_datetime: str = None, idx: int = 0) -> str:
-    """Filename mirip kamera Android / Expo ImagePicker, korelasi dengan foto_datetime bila ada.
+def rand_filename(foto_datetime: str = None, idx: int = 0, data_type: str = "beban-penyulang", subtype: str = None) -> str:
+    """Filename mirip aplikasi SUPER-I asli.
 
-    Pola:
-      50%: IMG_YYYYMMDD_HHMMSS.jpg
-      20%: IMG_YYYYMMDD_HHMMSS_mmm.jpg
-      15%: DCIM_<rand>.jpg / <8hex>.jpg (Expo style)
-      15%: foto_HHMMSS.jpg (legacy minor)
+    Pola asli (dari API manual):
+      beban-penyulang: fotoBebanPenyulang_YYYY-MM-DD_<hex16>.jpg  (2255 samples)
+      beban-trafo:     fotoBebanTrafo_YYYY-MM-DD_<hex>.jpg
+      tegangan:        fotoHV_YYYY-MM-DD_<hex>.jpg, fotoMV_YYYY-MM-DD_<hex>.jpg
+
+    Args:
+        foto_datetime: ISO8601 string untuk korelasi tanggal
+        idx: index untuk tegangan (0=HV,1=MV)
+        data_type: beban-penyulang | beban-trafo | tegangan-trafo
+        subtype: untuk tegangan: HV atau MV
+
+    Returns:
+        filename string seperti app asli
     """
+    # Parse date dari foto_datetime
     if foto_datetime:
         try:
             dt = datetime.strptime(foto_datetime, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=_UTC).astimezone(_WIB)
-            date_part = dt.strftime("%Y%m%d")
-            time_part = dt.strftime("%H%M%S")
-            ms_part = dt.strftime("%f")[:3]
+            date_part = dt.strftime("%Y-%m-%d")
         except ValueError:
             try:
                 dt = datetime.strptime(foto_datetime, "%Y-%m-%dT%H:%M:%S.%f")
-                date_part = dt.strftime("%Y%m%d")
-                time_part = dt.strftime("%H%M%S")
-                ms_part = dt.strftime("%f")[:3]
+                date_part = dt.strftime("%Y-%m-%d")
             except Exception:
-                now = datetime.now()
-                date_part = now.strftime("%Y%m%d")
-                time_part = now.strftime("%H%M%S")
-                ms_part = f"{random.randint(0,999):03d}"
+                date_part = datetime.now().strftime("%Y-%m-%d")
     else:
-        now = datetime.now()
-        date_part = now.strftime("%Y%m%d")
-        time_part = now.strftime("%H%M%S")
-        ms_part = f"{random.randint(0,999):03d}"
+        date_part = datetime.now().strftime("%Y-%m-%d")
 
-    r = random.random()
-    if r < 0.5:
-        if idx > 0:
-            suf = f"_{idx}" if random.random() < 0.5 else f"_{int(time_part) % 1000:03d}"
-            return f"IMG_{date_part}_{time_part}{suf}.jpg"
-        return f"IMG_{date_part}_{time_part}.jpg"
-    elif r < 0.7:
-        return f"IMG_{date_part}_{time_part}_{ms_part}.jpg"
-    elif r < 0.85:
-        if random.random() < 0.5:
-            return f"{uuid.uuid4().hex[:8]}.jpg"
-        return f"{uuid.uuid4().hex[:12]}.jpg"
+    # 16 hex chars (seperti manual: 707ab3a0bbe0d9a5) atau 12 hex untuk HV/MV
+    if "tegangan" in data_type:
+        hex_len = random.choice([12, 12, 16])  # HV/MV sering 12 chars
     else:
-        return f"foto_{time_part}.jpg"
+        hex_len = 16
+
+    hex_part = uuid.uuid4().hex[:hex_len]
+
+    # Tentukan prefix
+    if "tegangan" in data_type:
+        # subtype HV/MV
+        if subtype:
+            pref = f"foto{subtype}"
+        else:
+            pref = "fotoHV" if idx == 0 else "fotoMV"
+    elif "beban-trafo" in data_type or data_type == "trafo":
+        pref = "fotoBebanTrafo"
+    else:
+        pref = "fotoBebanPenyulang"
+
+    return f"{pref}_{date_part}_{hex_part}.jpg"
 
 
 def rand_user_agent() -> str:

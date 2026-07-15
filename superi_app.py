@@ -41,23 +41,44 @@ except Exception:
     hu = None
 
 
-def _human_foto_date(date_str, periode):
+def _human_foto_date(date_str, periode, durasi_min=None, data_type="beban-penyulang"):
     if hu:
-        return hu.rand_foto_datetime(date_str, periode)
+        return hu.rand_foto_datetime(date_str, periode, durasi_min)
     return f"{date_str}T{periode:02d}:00:00.000Z"
 
 
-def _human_foto_pair(date_str, periode):
+def _human_foto_pair(date_str, periode, durasi_min=None):
     if hu:
-        return hu.rand_foto_pair(date_str, periode)
+        return hu.rand_foto_pair(date_str, periode, durasi_min)
     ts = f"{date_str}T{periode:02d}:00:00.000Z"
     return ts, ts
 
 
-def _human_durasi():
+def _human_durasi(data_type="beban-penyulang"):
     if hu:
-        return hu.rand_durasi()
-    return 0.1
+        return hu.rand_durasi_for_type(data_type)
+    import random
+    # fallback: 2-7 detik -> menit
+    if "tegangan" in data_type:
+        return round(random.uniform(8.0, 35.0) / 60.0, 8)
+    return round(random.uniform(2.0, 7.0) / 60.0, 8)
+
+
+def _human_foto_dict(date_str, periode, durasi_min=None, data_type="beban-penyulang"):
+    if hu:
+        return hu.rand_foto_dict(data_type=data_type, date_str=date_str, periode=periode, durasi_min=durasi_min)
+    return {"date": _human_foto_date(date_str, periode, durasi_min), "address": "Jl. Swadaya 1 No.36, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia", "latitude": -6.213095, "longitude": 106.846073}
+
+
+def _human_foto_pair_dicts(date_str, periode, durasi_min=None):
+    if hu:
+        return hu.rand_foto_pair_dicts(date_str, periode, durasi_min)
+    ts1, ts2 = _human_foto_pair(date_str, periode, durasi_min)
+    base_addr = "Jl. Swadaya 1 No.36, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia"
+    return (
+        {"date": ts1, "address": base_addr, "latitude": -6.213095, "longitude": 106.846073},
+        {"date": ts2, "address": base_addr, "latitude": -6.213095, "longitude": 106.846073},
+    )
 
 
 def _human_sleep(a=0.6, b=2.2):
@@ -571,6 +592,14 @@ def api_delete(token, path):
     with urllib.request.urlopen(req) as resp:
         return json.loads(resp.read())
 
+def _infer_data_type_from_path(path: str) -> str:
+    if "tegangan-trafo" in path:
+        return "tegangan-trafo"
+    if "beban-trafo" in path:
+        return "beban-trafo"
+    return "beban-penyulang"
+
+
 def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photos):
     url = f"{API_BASE}{path}"
     inner = json.dumps(data_dict)
@@ -581,6 +610,8 @@ def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photo
         foto_ts_for_name = data_dict["foto"]["date"]
     elif data_dict.get("fotoHV", {}).get("date"):
         foto_ts_for_name = data_dict["fotoHV"]["date"]
+
+    data_type_hint = _infer_data_type_from_path(path)
 
     if hu:
         if num_photos > 1:
@@ -597,14 +628,27 @@ def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photo
         if hu:
             if num_photos > 1 and i == 1 and "fotoMV" in data_dict:
                 fn_ts = data_dict.get("fotoMV", {}).get("date") or foto_ts_for_name
+                subtype = "MV"
             elif num_photos > 1 and i == 0:
                 fn_ts = data_dict.get("fotoHV", {}).get("date") or foto_ts_for_name
+                subtype = "HV"
             else:
                 fn_ts = foto_ts_for_name
-            fname = hu.rand_filename(fn_ts, idx=i)
+                subtype = None
+            fname = hu.rand_filename(fn_ts, idx=i, data_type=data_type_hint, subtype=subtype)
             fbytes = jpeg_pool[i % len(jpeg_pool)]
         else:
-            fname = f"foto{i+1}.jpg" if num_photos > 1 else "foto.jpg"
+            # fallback manual-like filename
+            import uuid as _uuid
+            date_part = data_dict.get("foto", {}).get("date", "")[:10] or "2026-07-15"
+            hex16 = _uuid.uuid4().hex[:16]
+            if "tegangan" in data_type_hint:
+                pref = f"foto{'MV' if i==1 else 'HV'}"
+                fname = f"{pref}_{date_part}_{hex16[:12]}.jpg"
+            elif "beban-trafo" in data_type_hint:
+                fname = f"fotoBebanTrafo_{date_part}_{hex16}.jpg"
+            else:
+                fname = f"fotoBebanPenyulang_{date_part}_{hex16}.jpg"
             fbytes = file_bytes if isinstance(file_bytes, bytes) else file_bytes
 
         body_parts.append(f'--{bd}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fname}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
@@ -1293,6 +1337,7 @@ def input_single(token, data_type, gi_id, date_str, user_info):
         return
     
     dt = datetime.strptime(date_str, "%Y-%m-%d")
+    durasi = _human_durasi(data_type)
     data_dict = {
         ep["id_field"]: item_id,
         "timezone": "Asia/Jakarta",
@@ -1300,18 +1345,18 @@ def input_single(token, data_type, gi_id, date_str, user_info):
         "tanggal": dt.day,
         "bulan": dt.month - 1,
         "tahun": dt.year,
-        "durasi": _human_durasi(),
+        "durasi": durasi,
         ep["value_field"]: value,
     }
 
     if data_type == "tegangan-trafo":
-        ts1, ts2 = _human_foto_pair(date_str, per)
+        fotoHV, fotoMV = _human_foto_pair_dicts(date_str, per, durasi)
         data_dict["hv"] = extra_values.get("hv", 150)
-        data_dict["fotoHV"] = {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-        data_dict["fotoMV"] = {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+        data_dict["fotoHV"] = fotoHV
+        data_dict["fotoMV"] = fotoMV
     else:
-        data_dict["foto"] = {"date": _human_foto_date(date_str, per), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-    
+        data_dict["foto"] = _human_foto_dict(date_str, per, durasi, data_type)
+
     print("\n  Mengirim...")
     status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
     
@@ -1571,7 +1616,8 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
         total = len(valid_periods)
         for i, per in enumerate(valid_periods, 1):
             mv, hv, _ = teg_suggestions[per]
-            ts1, ts2 = _human_foto_pair(date_str, per)
+            durasi = _human_durasi(data_type)
+            fotoHV, fotoMV = _human_foto_pair_dicts(date_str, per, durasi)
             data_dict = {
                 ep["id_field"]: item["id"],
                 "timezone": "Asia/Jakarta",
@@ -1579,11 +1625,11 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
                 "tanggal": dt.day,
                 "bulan": dt.month - 1,
                 "tahun": dt.year,
-                "durasi": _human_durasi(),
+                "durasi": durasi,
                 ep["value_field"]: mv,
                 "hv": hv,
-                "fotoHV": {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
-                "fotoMV": {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+                "fotoHV": fotoHV,
+                "fotoMV": fotoMV,
             }
             status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
             ok = result.get("success")
@@ -1635,6 +1681,7 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
     fail = 0
     total = len(empty_periods)
     for i, per in enumerate(empty_periods, 1):
+        durasi = _human_durasi(data_type)
         data_dict = {
             ep["id_field"]: item["id"],
             "timezone": "Asia/Jakarta",
@@ -1642,9 +1689,9 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
             "tanggal": dt.day,
             "bulan": dt.month - 1,
             "tahun": dt.year,
-            "durasi": _human_durasi(),
+            "durasi": durasi,
             ep["value_field"]: value,
-            "foto": {"date": _human_foto_date(date_str, per), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+            "foto": _human_foto_dict(date_str, per, durasi, data_type),
         }
         status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
         ok = result.get("success")
@@ -1839,6 +1886,7 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     shuffled_items = _human_shuffled(valid_items)
     for i, it in enumerate(shuffled_items, 1):
         s = suggestions[it["id"]]
+        durasi = _human_durasi(data_type)
         data_dict = {
             ep["id_field"]: it["id"],
             "timezone": "Asia/Jakarta",
@@ -1846,20 +1894,20 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
             "tanggal": dt.day,
             "bulan": dt.month - 1,
             "tahun": dt.year,
-            "durasi": _human_durasi(),
+            "durasi": durasi,
         }
         if data_type == "tegangan-trafo":
             mv_val, hv_val = s
-            ts1, ts2 = _human_foto_pair(date_str, per)
+            fotoHV, fotoMV = _human_foto_pair_dicts(date_str, per, durasi)
             data_dict[ep["value_field"]] = mv_val
             data_dict["hv"] = hv_val
-            data_dict["fotoHV"] = {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
-            data_dict["fotoMV"] = {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+            data_dict["fotoHV"] = fotoHV
+            data_dict["fotoMV"] = fotoMV
             detail = f"MV={mv_val} HV={hv_val}"
         else:
             value = s[0]
             data_dict[ep["value_field"]] = value
-            data_dict["foto"] = {"date": _human_foto_date(date_str, per), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846}
+            data_dict["foto"] = _human_foto_dict(date_str, per, durasi, data_type)
             detail = f"{value}A"
 
         try:

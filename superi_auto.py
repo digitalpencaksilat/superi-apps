@@ -61,19 +61,53 @@ CONFIG_FILE = os.path.join(SCRIPT_DIR, ".superi_config.json")
 LOG_FILE = os.path.join(SCRIPT_DIR, "auto_log.txt")
 
 
-def _h_durasi():
-    return hu.rand_durasi() if hu else 0.1
-
-
-def _h_foto_date(date_str, periode):
-    return hu.rand_foto_datetime(date_str, periode) if hu else f"{date_str}T{periode:02d}:00:00.000Z"
-
-
-def _h_foto_pair(date_str, periode):
+def _h_durasi(data_type="beban-penyulang"):
     if hu:
-        return hu.rand_foto_pair(date_str, periode)
+        return hu.rand_durasi_for_type(data_type)
+    import random
+    if "tegangan" in data_type:
+        return round(random.uniform(8.0, 35.0) / 60.0, 8)
+    return round(random.uniform(2.0, 7.0) / 60.0, 8)
+
+
+def _h_foto_date(date_str, periode, durasi_min=None, data_type="beban-penyulang"):
+    if hu:
+        return hu.rand_foto_datetime(date_str, periode, durasi_min)
+    return f"{date_str}T{periode:02d}:00:00.000Z"
+
+
+def _h_foto_pair(date_str, periode, durasi_min=None):
+    if hu:
+        return hu.rand_foto_pair(date_str, periode, durasi_min)
     ts = f"{date_str}T{periode:02d}:00:00.000Z"
     return ts, ts
+
+
+def _h_foto_dict(date_str, periode, durasi_min=None, data_type="beban-penyulang"):
+    if hu:
+        return hu.rand_foto_dict(data_type=data_type, date_str=date_str, periode=periode, durasi_min=durasi_min)
+    # fallback manual-like
+    import random
+    addrs = [
+        ("Jl. Swadaya 1 No.36, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia", -6.213095, 106.846073),
+        ("Gis 150 Kv Manggarai, Jl. Swadaya 1 No.21, RT.12/RW.10, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia", -6.213208, 106.845899),
+    ]
+    addr, lat, lon = addrs[0]
+    # jitter
+    lat = round(lat + random.uniform(-0.00008, 0.00008), 7)
+    lon = round(lon + random.uniform(-0.00008, 0.00008), 7)
+    return {"date": _h_foto_date(date_str, periode, durasi_min, data_type), "address": addr, "latitude": lat, "longitude": lon}
+
+
+def _h_foto_pair_dicts(date_str, periode, durasi_min=None):
+    if hu:
+        return hu.rand_foto_pair_dicts(date_str, periode, durasi_min)
+    ts1, ts2 = _h_foto_pair(date_str, periode, durasi_min)
+    base = "Jl. Swadaya 1 No.36, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia"
+    return (
+        {"date": ts1, "address": base, "latitude": -6.213095, "longitude": 106.846073},
+        {"date": ts2, "address": base, "latitude": -6.213098, "longitude": 106.846075},
+    )
 
 
 def _h_sleep(a=0.6, b=2.2):
@@ -297,11 +331,12 @@ def auto_input_trafo_from_penyulang(token, gi_id, date_str, periode, dry_run=Fal
             trafo = calc["trafo"]
             fallback = f", fallback 0A: {', '.join(calc['fallbacks'])}" if calc["fallbacks"] else ""
             value_log = f"{calc['total']}Ampere ({len(calc['contributors'])} penyulang aktif{fallback})"
+            durasi = _h_durasi("beban-trafo")
             payload = {
                 "trafoId": trafo["id"], "timezone": "Asia/Jakarta", "periode": periode,
-                "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year, "durasi": _h_durasi(),
+                "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year, "durasi": durasi,
                 "beban": calc["total"],
-                "foto": {"date": _h_foto_date(date_str, periode), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+                "foto": _h_foto_dict(date_str, periode, durasi, "beban-trafo"),
             }
             if dry_run:
                 log(f"  [DRY] {trafo.get('nama', '?')} P{periode:02d}: {value_log} | foto={payload['foto']['date']} durasi={payload['durasi']}")
@@ -421,16 +456,17 @@ def auto_input_jam(token, data_type, gi_id, date_str, periode, dry_run=False, ma
                     attempt_anomaly += 1
 
                 value_log = f"MV={mv} HV={hv}"
-                ts1, ts2 = _h_foto_pair(date_str, periode)
+                durasi = _h_durasi(data_type)
+                fotoHV, fotoMV = _h_foto_pair_dicts(date_str, periode, durasi)
                 data_dict = {
                     ep["id_field"]: item_id,
                     "timezone": "Asia/Jakarta",
                     "periode": periode,
                     "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year,
-                    "durasi": _h_durasi(),
+                    "durasi": durasi,
                     ep["value_field"]: mv, "hv": hv,
-                    "fotoHV": {"date": ts1, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
-                    "fotoMV": {"date": ts2, "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+                    "fotoHV": fotoHV,
+                    "fotoMV": fotoMV,
                 }
             else:
                 val, info = a.smart_suggest_from_cache(cache, item_id, periode, is_weekend)
@@ -456,14 +492,15 @@ def auto_input_jam(token, data_type, gi_id, date_str, periode, dry_run=False, ma
                     attempt_anomaly += 1
 
                 value_log = f"{val}{ep['unit']}"
+                durasi = _h_durasi(data_type)
                 data_dict = {
                     ep["id_field"]: item_id,
                     "timezone": "Asia/Jakarta",
                     "periode": periode,
                     "tanggal": dt.day, "bulan": dt.month - 1, "tahun": dt.year,
-                    "durasi": _h_durasi(),
+                    "durasi": durasi,
                     ep["value_field"]: val,
-                    "foto": {"date": _h_foto_date(date_str, periode), "address": "GI MANGGARAI", "latitude": -6.213, "longitude": 106.846},
+                    "foto": _h_foto_dict(date_str, periode, durasi, data_type),
                 }
 
             if dry_run:

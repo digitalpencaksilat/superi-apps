@@ -2,8 +2,39 @@
 
 Semua perubahan penting pada project ini akan didokumentasikan di file ini.
 
-Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0/),
+Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0),
 dan project ini menggunakan [Semantic Versioning](https://semver.org/lang/id/).
+
+## [1.2.1] — 2026-07-15
+
+### Fixed
+
+- **Durasi input tidak lagi robotik 3-6 menit per entry (P16 LABORATORIUM 4.3s vs CASABLANCA4 3.91 menit).**
+  - Server SUPER-I menyimpan `durasi` dalam **menit**, bukan detik. `rand_durasi()` sebelumnya return `2-7` (detik) langsung → disimpan sebagai `2-7 menit` → tampil `3.49 menit / 6.21 menit` di UI resmi.
+  - Sekarang `rand_durasi()` return `0.033-0.116 menit` (`2-7 detik`), `rand_durasi_tegangan()` `0.13-0.58 menit` (`8-35 detik`). Manual avg: beban `0.105 menit=6.35s`, tegangan `0.305 menit=18.3s`. Verified via live API fetch P16 LABORATORIUM `0.0724 menit=4.34s` vs CASABLANCA4 outlier `3.91 menit=234s`.
+  - Fallback `0.1` di 4 modul (`superi_app`, `superi_auto`, `superi_input`, `superi_web`) diganti `rand_durasi_for_type()` agar tidak hardcode `0.1`.
+  - `foto.date` sekarang korelasi dengan durasi: `now - (durasi + buffer 0.5-2.8s)` untuk hari ini, max 90s. Sebelumnya `20-180 detik` & `60-220 detik` sehingga durasi 4 detik tapi foto 3 menit lalu (inkonsisten).
+
+- **Foto URI & address tidak lagi terdeteksi robot (GI MANGGARAI statis vs alamat lengkap).**
+  - Manual: `fotoBebanPenyulang_2026-07-15_707ab3a0bbe0d9a5.jpg` + `Jl. Swadaya 1 No.36, RT.3/RW.8, Manggarai, Kec. Tebet, Jakarta Selatan, DKI Jakarta 12850, Indonesia` + lat/lon jitter ±5-15m.
+  - Project lama: `IMG_20260715_162847_...jpg` / `foto_...` / `8hex.jpg` + `GI MANGGARAI` + lat/lon `-6.213/106.846` statis.
+  - Sekarang `rand_filename()` generates `fotoBebanPenyulang_YYYY-MM-DD_<hex16>.jpg`, `fotoBebanTrafo_`, `fotoHV_`, `fotoMV_` (parity 2255 samples manual).
+  - `rand_location()` pool 13 alamat real GI Manggarai area (dari API manual 5 hari), jitter koordinat, 5% chance `Lat=-6.213..., Long=106.846...` format, variasi nomor jalan ±1.
+  - `rand_foto_dict()` & `rand_foto_pair_dicts()` return dict lengkap `{date, address, latitude, longitude}` realistis, HV/MV lokasi berdekatan (2-6m).
+  - `api_post_multipart()` di semua 4 modul sekarang infer `data_type` dari path dan pakai filename manual pattern.
+
+### Changed
+
+- `superi_app.py`: `_human_foto_date/durasi/pair` → sinkron durasi+foto, `_human_foto_dict/pair_dicts`, `_infer_data_type_from_path`, batch fill per-item & per-jam pakai lokasi real.
+- `superi_auto.py`: `_h_durasi(data_type)`, `_h_foto_dict/pair_dicts`, trafo agregasi & auto jam pakai durasi menit + lokasi real.
+- `superi_input.py`: `_h_durasi/foto_dict/pair_dicts/filename` dengan `data_type` param.
+- `superi_web.py`: same + `api_post_multipart` with data_type hint, batch/per-periode/scripting input fix.
+- `tests/test_humanizer.py`: 13 → 23 tests, tambah `test_rand_durasi_converts_to_2_7_seconds`, `test_filename_manual_pattern`, `test_location_realistic`, `test_foto_dict/pair_dicts`, `test_foto_datetime_with_durasi_correlated`.
+
+### Verified
+
+- Dry-run P17: LABORATORIUM `0.0898 menit=5.39s`, CASABLANCA4 `0.0951 menit=5.71s` (sebelumnya `3.91/6.93 menit`).
+- 47 CLI render tests + 12 auto mode tests + 23 humanizer tests = 82 OK.
 
 ## [1.2.0] — 2026-07-15
 
@@ -170,6 +201,7 @@ otomasi pekerjaan operator Gardu Induk 20kV.
 - Troubleshooting guide untuk error umum
 - Konfigurasi & deployment instructions
 
+[1.2.1]: https://github.com/digitalpencaksilat/superi-apps/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/digitalpencaksilat/superi-apps/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/digitalpencaksilat/superi-apps/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/digitalpencaksilat/superi-apps/compare/v1.0.0...v1.1.0

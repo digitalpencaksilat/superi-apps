@@ -50,29 +50,63 @@ except Exception:
     hu = None
 
 
-def _h_durasi():
-    return hu.rand_durasi() if hu else 0.1
-
-
-def _h_foto_date(date_str, periode):
+def _h_durasi(data_type="beban-penyulang"):
     if hu:
-        return hu.rand_foto_datetime(date_str, periode)
+        return hu.rand_durasi_for_type(data_type)
+    import random
+    if "tegangan" in data_type:
+        return round(random.uniform(8.0, 35.0) / 60.0, 8)
+    return round(random.uniform(2.0, 7.0) / 60.0, 8)
+
+
+def _h_foto_date(date_str, periode, durasi_min=None, data_type="beban-penyulang"):
+    if hu:
+        return hu.rand_foto_datetime(date_str, periode, durasi_min)
     return f"{date_str}T{periode:02d}:00:00.000Z"
 
 
-def _h_foto_pair(date_str, periode):
+def _h_foto_pair(date_str, periode, durasi_min=None):
     if hu:
-        return hu.rand_foto_pair(date_str, periode)
+        return hu.rand_foto_pair(date_str, periode, durasi_min)
     ts = f"{date_str}T{periode:02d}:00:00.000Z"
     return ts, ts
+
+
+def _h_foto_dict(date_str, periode, durasi_min=None, data_type="beban-penyulang"):
+    if hu:
+        return hu.rand_foto_dict(data_type=data_type, date_str=date_str, periode=periode, durasi_min=durasi_min)
+    import random
+    base_addr = "Jl. Swadaya 1 No.36, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia"
+    return {"date": _h_foto_date(date_str, periode, durasi_min, data_type), "address": base_addr, "latitude": -6.213095 + random.uniform(-0.00008, 0.00008), "longitude": 106.846073 + random.uniform(-0.00008, 0.00008)}
+
+
+def _h_foto_pair_dicts(date_str, periode, durasi_min=None):
+    if hu:
+        return hu.rand_foto_pair_dicts(date_str, periode, durasi_min)
+    ts1, ts2 = _h_foto_pair(date_str, periode, durasi_min)
+    base = "Jl. Swadaya 1 No.36, RT.3/RW.8, Manggarai, Kec. Tebet, Kota Jakarta Selatan, Daerah Khusus Ibukota Jakarta 12850, Indonesia"
+    return (
+        {"date": ts1, "address": base, "latitude": -6.213095, "longitude": 106.846073},
+        {"date": ts2, "address": base, "latitude": -6.213098, "longitude": 106.846075},
+    )
 
 
 def _h_boundary():
     return hu.rand_boundary() if hu else BOUNDARY
 
 
-def _h_filename(foto_ts, idx=0):
-    return hu.rand_filename(foto_ts, idx=idx) if hu else f"foto{idx + 1}.jpg"
+def _h_filename(foto_ts, idx=0, data_type="beban-penyulang", subtype=None):
+    if hu:
+        return hu.rand_filename(foto_ts, idx=idx, data_type=data_type, subtype=subtype)
+    import uuid
+    date_part = (foto_ts or "")[:10] or "2026-07-15"
+    hex16 = uuid.uuid4().hex[:16]
+    if "tegangan" in data_type:
+        pref = f"foto{subtype or ('MV' if idx==1 else 'HV')}"
+        return f"{pref}_{date_part}_{hex16[:12]}.jpg"
+    elif "beban-trafo" in data_type:
+        return f"fotoBebanTrafo_{date_part}_{hex16}.jpg"
+    return f"fotoBebanPenyulang_{date_part}_{hex16}.jpg"
 
 
 def _h_user_agent():
@@ -254,8 +288,7 @@ def submit_beban(token: str, data_type: str, gi_id: int, item_id: int,
         file_bytes = DUMMY_JPEG
     
     date_str_full = f"{dt.year}-{dt.month:02d}-{dt.day:02d}"
-    ts_beban = _h_foto_date(date_str_full, periode)
-    ts1, ts2 = _h_foto_pair(date_str_full, periode)
+    durasi = _h_durasi(data_type)
 
     data_dict = {
         ep["id_field"]: item_id,
@@ -264,31 +297,22 @@ def submit_beban(token: str, data_type: str, gi_id: int, item_id: int,
         "tanggal": dt.day,
         "bulan": dt.month - 1,
         "tahun": dt.year,
-        "durasi": _h_durasi(),
+        "durasi": durasi,
         ep["value_field"]: value,
-        "foto": {
-            "date": ts_beban,
-            "address": "GI MANGGARAI",
-            "latitude": -6.213,
-            "longitude": 106.846,
-        }
+        "foto": _h_foto_dict(date_str_full, periode, durasi, data_type),
     }
 
     if data_type == "tegangan-trafo":
         data_dict["hv"] = value_2 or 150
+        fotoHV, fotoMV = _h_foto_pair_dicts(date_str_full, periode, durasi)
         del data_dict["foto"]
-        data_dict["fotoHV"] = {
-            "date": ts1,
-            "address": "GI MANGGARAI",
-            "latitude": -6.213,
-            "longitude": 106.846,
-        }
-        data_dict["fotoMV"] = {
-            "date": ts2,
-            "address": "GI MANGGARAI",
-            "latitude": -6.213,
-            "longitude": 106.846,
-        }
+        data_dict["fotoHV"] = fotoHV
+        data_dict["fotoMV"] = fotoMV
+        ts1 = fotoHV["date"]
+        ts2 = fotoMV["date"]
+    else:
+        ts1 = ts2 = data_dict["foto"]["date"]
+        ts_beban = ts1
 
     file_field = ep.get("file_field", "file")
     inner = json.dumps(data_dict)
@@ -307,15 +331,15 @@ def submit_beban(token: str, data_type: str, gi_id: int, item_id: int,
         f'--{bd}\r\nContent-Disposition: form-data; name="data"\r\n\r\n{inner}\r\n'.encode(),
     ]
     if data_type == "tegangan-trafo":
-        fn1 = _h_filename(ts1, idx=0)
-        fn2 = _h_filename(ts2, idx=1)
+        fn1 = _h_filename(ts1, idx=0, data_type=data_type, subtype="HV")
+        fn2 = _h_filename(ts2, idx=1, data_type=data_type, subtype="MV")
         body_parts.append(f'--{bd}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fn1}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
         body_parts.append(jpeg_pool[0])
         body_parts.append(f'\r\n--{bd}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fn2}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
         body_parts.append(jpeg_pool[1])
         body_parts.append(f'\r\n--{bd}--\r\n'.encode())
     else:
-        fn = _h_filename(ts_beban, idx=0)
+        fn = _h_filename(ts_beban, idx=0, data_type=data_type)
         body_parts.append(f'--{bd}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fn}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
         body_parts.append(jpeg_pool[0])
         body_parts.append(f'\r\n--{bd}--\r\n'.encode())
