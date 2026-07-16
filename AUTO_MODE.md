@@ -45,26 +45,37 @@ superi auto --jam 23              # Beneran input jam 23
 
 ---
 
-## 🍎 macOS — Setup Cron
+## 🍎 macOS — Setup Cron (Random Menit 3-38 Anti-Robotik)
 
-1. Edit crontab:
-   ```bash
-   crontab -e
-   ```
+**Cara otomatis (direkomendasikan):**
+```bash
+superi cli → [D] Auto Mode → [7] Pasang Jadwal Otomatis
+```
+Sistem otomatis bikin **N baris cron** sesuai window jam kamu, tiap jam menit random **3-38** (bukan 5 exact), + jitter 2-110 detik di dalam script.
 
-2. Tambahkan baris ini (jalan tiap jam, menit ke-5):
-   ```
-   5 22-23,0-5 * * * /Applications/XAMPP/htdocs/superi-apps/.venv/bin/python3 /Applications/XAMPP/htdocs/superi-apps/superi_auto.py >> /Applications/XAMPP/htdocs/superi-apps/auto_log.txt 2>&1
-   ```
-   
-   Penjelasan `5 22-23,0-5 * * *`:
-   - Menit 5, jam 22-23 dan 00-05, setiap hari
-   - Auto mode internal juga cek window, jadi aman
+Contoh hasil `crontab -l` untuk window `22-05` (8 jam = 8 baris):
+```
+12 22 * * * /Applications/XAMPP/htdocs/superi-apps/.venv/bin/python3 /Applications/XAMPP/htdocs/superi-apps/superi_auto.py >> /Applications/XAMPP/htdocs/superi-apps/auto_log.txt 2>&1 # SUPER-I-AUTO
+7 23 * * * /Applications/XAMPP/htdocs/superi-apps/.venv/bin/python3 /Applications/XAMPP/htdocs/superi-apps/superi_auto.py >> /Applications/XAMPP/htdocs/superi-apps/auto_log.txt 2>&1 # SUPER-I-AUTO
+33 0 * * * /Applications/XAMPP/htdocs/superi-apps/.venv/bin/python3 /Applications/XAMPP/htdocs/superi-apps/superi_auto.py >> /Applications/XAMPP/htdocs/superi-apps/auto_log.txt 2>&1 # SUPER-I-AUTO
+19 1 * * * /Applications/XAMPP/htdocs/superi-apps/.venv/bin/python3 /Applications/XAMPP/htdocs/superi-apps/superi_auto.py >> /Applications/XAMPP/htdocs/superi-apps/auto_log.txt 2>&1 # SUPER-I-AUTO
+4 2 * * * ...
+27 3 * * * ...
+11 4 * * * ...
+36 5 * * * ...
+```
 
-3. Simpan & keluar. Cek terjadwal:
-   ```bash
-   crontab -l
-   ```
+**Kenapa random 3-38?** Biar mirip operator setting manual biar ga bentrok, bukan bot menit 5 terus. 
+Jaminan tidak telat lewat jam: menit max 38 + jitter max 110 detik = mulai max 39:50 + runtime max 5 menit = selesai max 44, sisa 15 menit buffer sebelum jam berikutnya.
+
+**Setiap install, menitnya regenerate** jadi beda-beda tiap hari (mirip setting manual baru).
+
+Kalau mau manual edit:
+```bash
+crontab -e
+# hapus semua # SUPER-I-AUTO lama, pasang 8 baris random baru sesuai window kamu
+crontab -l  # cek
+```
 
 **PENTING macOS**: Supaya laptop tidak sleep di malam hari, atur:
 ```bash
@@ -75,24 +86,33 @@ caffeinate -s
 
 ---
 
-## 🪟 Windows — Setup Task Scheduler
+## 🪟 Windows — Setup Task Scheduler (8 Task Random Menit 3-38)
 
-1. Buka **Task Scheduler** (cari di Start Menu)
+**Cara otomatis (direkomendasikan):**
+```bat
+superi cli → [D] Auto Mode → [7] Pasang Jadwal Otomatis
+```
+Sistem otomatis bikin **N task** sesuai window jam kamu (misal window 22-05 = 8 task), tiap task menit random **3-38 beda tiap jam**, daily.
 
-2. **Create Basic Task**:
-   - Name: `SUPER-I Auto Input`
-   - Trigger: **Daily**, repeat **every 1 hour**
-   - Action: **Start a program**
-     - Program: `C:\superi-apps\superi.bat`
-     - Arguments: `auto`
-     - Start in: `C:\superi-apps`
+Contoh Task Scheduler untuk window `22-05` (8 task):
+```
+SUPER-I-Auto-22  Daily  22:12  superi.bat auto
+SUPER-I-Auto-23  Daily  23:07  superi.bat auto
+SUPER-I-Auto-00  Daily  00:33  superi.bat auto
+SUPER-I-Auto-01  Daily  01:19  superi.bat auto
+SUPER-I-Auto-02  Daily  02:04  ...
+SUPER-I-Auto-03  Daily  03:27  ...
+SUPER-I-Auto-04  Daily  04:11  ...
+SUPER-I-Auto-05  Daily  05:36  ...
+```
+Keliatan kayak operator bikin manual 8 task biar rapi, tiap jam beda menit, super stealth mirip Mac.
 
-3. **Settings tambahan** (penting):
-   - ✅ "Run whether user is logged on or not"
-   - ✅ "Wake the computer to run this task" (kalau mau bangunin dari sleep)
-   - ✅ "Run task as soon as possible after a scheduled start is missed"
+**Jaminan anti-telat sama:** menit 3-38 + jitter 110s + runtime 5 menit = selesai max 44.
 
-4. Auto mode internal cek window (22-05), jadi walau task jalan tiap jam, cuma eksekusi di malam hari.
+Kalau mau manual:
+1. Buka **Task Scheduler** (Start Menu)
+2. Create Task **per jam**: Name `SUPER-I-Auto-22`, Trigger Daily `22:12`, Action `superi.bat auto` di folder project, ulangi untuk 23,00,01,02,03,04,05 dengan menit beda 3-38.
+3. Settings: ✅ "Run whether user is logged on or not", ✅ "Wake the computer", ✅ "Run as soon as possible after missed"
 
 **PENTING Windows**: Atur **Power Options** supaya tidak sleep, atau centang "Wake the computer to run this task".
 

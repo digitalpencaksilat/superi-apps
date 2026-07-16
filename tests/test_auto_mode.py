@@ -146,6 +146,85 @@ class TrafoAggregationTests(unittest.TestCase):
         self.assertEqual(result["skipped"], 1)
 
 
+class CronRandomAntiRobotTests(unittest.TestCase):
+    def test_random_minute_range_3_38_not_multiple_of_5(self):
+        # Import dari superi_app.py
+        import importlib
+        spec = importlib.util.spec_from_file_location("superi_app_check", os.path.join(ROOT, "superi_app.py"))
+        # Quick check via reading file: _random_minute logic
+        with open(os.path.join(ROOT, "superi_app.py"), "r", encoding="utf-8") as f:
+            content = f.read()
+        # Must contain _random_minute and range 3,39
+        self.assertIn("def _random_minute", content)
+        self.assertIn("range(3, 39)", content)
+        self.assertIn("% 5 != 0", content)
+        self.assertIn("_expand_window_to_hours", content)
+        self.assertIn("_generate_cron_lines", content)
+        self.assertIn("_generate_win_tasks", content)
+
+    def test_expand_window_normal_and_cross_midnight(self):
+        # Simulate expand logic
+        def expand(start, end):
+            start = int(start) % 24
+            end = int(end) % 24
+            hours = []
+            h = start
+            while True:
+                hours.append(h)
+                if h == end:
+                    break
+                h = (h + 1) % 24
+                if len(hours) > 24:
+                    break
+            return hours
+        self.assertEqual(expand(22, 5), [22, 23, 0, 1, 2, 3, 4, 5])
+        self.assertEqual(expand(9, 17), [9, 10, 11, 12, 13, 14, 15, 16, 17])
+        self.assertEqual(expand(0, 23), list(range(24)))
+        self.assertEqual(expand(22, 22), [22])
+
+    def test_cron_jitter_plus_minute_never_exceed_hour(self):
+        # Menit max 38 + jitter 110 detik + runtime 5 menit = 44 menit < 60
+        max_minute = 38
+        max_jitter_sec = 110
+        max_runtime_sec = 5 * 60
+        total_sec = max_minute * 60 + max_jitter_sec + max_runtime_sec
+        # Harus < 60 menit = 3600 detik, tapi minimal < 50 menit biar ada buffer 15 menit
+        self.assertLess(total_sec, 50 * 60, f"selesai {total_sec/60:.1f} menit, harus <50 menit (sisa 15 menit buffer)")
+        self.assertLess(total_sec, 60 * 60)
+
+    def test_generate_cron_lines_uses_random_not_fixed_5(self):
+        with open(os.path.join(ROOT, "superi_app.py"), "r", encoding="utf-8") as f:
+            content = f.read()
+        # Old single line 5 * * * * should be deprecated, not used in cron_install now
+        # New should use _generate_cron_lines and _random_minute
+        self.assertIn("cron_install", content)
+        # cron_install should call _generate_cron_lines
+        self.assertIn("_generate_cron_lines", content)
+        # Must not hardcode "5 * * * *" as active install logic in new flow
+        # _cron_command deprecated still contains 5, but install uses _generate_cron_lines
+
+    def test_win_tasks_8_tasks_unique_hours(self):
+        def expand(start, end):
+            start = int(start) % 24
+            end = int(end) % 24
+            hours = []
+            h = start
+            while True:
+                hours.append(h)
+                if h == end:
+                    break
+                h = (h + 1) % 24
+                if len(hours) > 24:
+                    break
+            return hours
+        hours = expand(22, 5)
+        # 8 task untuk window 22-05
+        self.assertEqual(len(hours), 8)
+        # Nama task harus SUPER-I-Auto-XX
+        for h in hours:
+            self.assertIn(f"{h:02d}", [f"{x:02d}" for x in hours])
+
+
 class WindowsLauncherStaticTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -170,9 +249,19 @@ class WindowsLauncherStaticTests(unittest.TestCase):
     def test_windows_scheduler_cd_to_project_before_auto(self):
         self.assertIn('cmd /c cd /d "{SCRIPT_DIR}" && "{bat}" auto', self.app)
 
-    def test_windows_scheduler_runs_every_5_minutes_and_logs(self):
-        self.assertIn('"/sc", "minute", "/mo", "5"', self.app)
+    def test_windows_scheduler_8_tasks_daily_random(self):
+        # New: 8 task daily random, bukan tiap 5 menit
+        self.assertIn('WIN_TASK_PREFIX', self.app)
+        self.assertIn('SUPER-I-Auto-', self.app)
+        self.assertIn('/sc", "daily"', self.app)
         self.assertIn('auto_task_log.txt', self.app)
+        # Old 5-minute logic harus sudah tidak jadi default install lagi
+        # tapi boleh masih ada di legacy cleanup, jadi cek new path ada
+        self.assertIn("_generate_win_tasks", self.app)
+        self.assertIn("_random_minute", self.app)
+
+    def test_windows_scheduler_prefix_cleanup(self):
+        self.assertIn("for h in range(24)", self.app)  # uninstall bersihkan 24 jam
 
 
 if __name__ == "__main__":

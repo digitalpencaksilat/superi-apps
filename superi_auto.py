@@ -577,17 +577,31 @@ def run_auto(force_jam=None, types=None, dry_run=False):
         log("Auto mode tidak aktif. Aktifkan dengan: superi auto --enable", "WARN")
         return False
     
-    # Tentukan jam
+    # Tentukan jam - anti nyebrang jam karena jitter 2-110 detik
+    # Cron random menit 3-38 (max 38) + jitter 110s = mulai max 39:50, runtime max 5 menit = selesai 44, sisa 15 menit buffer
     now = datetime.now()
-    jam = force_jam if force_jam is not None else now.hour
     date_str = now.strftime("%Y-%m-%d")
+    if force_jam is not None:
+        jam = force_jam
+    else:
+        now_before = datetime.now()
+        jam = now_before.hour
+        # Jitter setelah ambil jam, tapi pakai now_before sebagai logical hour biar ga salah periode kalau nyebrang
+        _h_initial_jitter()
+        now_after = datetime.now()
+        if now_after.hour != jam:
+            # Nyebrang jam karena jitter + cron menit 38, tetap pakai logical jam awal
+            log(f"Jitter nyebrang jam {jam:02d}->{now_after.hour:02d}, tetap pakai logical jam {jam:02d} biar periode benar", "WARN")
+            # jam tetap = now_before.hour, date_str tetap = now_before date
+            # Kalau nyebrang tengah malam (23->00), date_str bisa ganti, tapi tetap pakai before date biar konsisten
+            # Untuk safety, kalau 23->00 dan before date beda hari, tetap pakai before
 
     if force_jam is None:
-        _h_initial_jitter()
         win_start = cfg.get("auto_window_start", 22)
         win_end = cfg.get("auto_window_end", 5)
         if not in_window(jam, win_start, win_end):
-            log(f"Jam {jam:02d}:00 di luar window aktif ({win_start:02d}:00-{win_end:02d}:00). Skip.", "INFO")
+            # Cron baru sudah window-only (N baris sesuai jam), jadi hampir tidak pernah log ini
+            # Silent return biar auto_log.txt bersih cuma isi OK, bukan spam 16x skip per hari
             return False
     
     # Tentukan tipe

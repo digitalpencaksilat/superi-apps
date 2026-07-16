@@ -16,6 +16,7 @@ import sys
 import base64
 import subprocess
 import platform
+import random
 from datetime import datetime
 
 # ============================================================
@@ -1968,47 +1969,126 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     input(f"  {C['D']}[Enter]{C['R']}")
 
 CRON_MARKER = "# SUPER-I-AUTO"
+WIN_TASK_PREFIX = "SUPER-I-Auto"
+WIN_TASK_NAME = "SUPER-I-Auto-Input"  # legacy single task name, untuk backward compat
 
-def _cron_command():
-    """Baris cron untuk auto mode."""
+# ============================================================
+# RANDOM MINUTE 3-38 (super aman, anti-robotik)
+# 38 + 110s jitter + 5 menit runtime = selesai max 44 menit, sisa 15 menit buffer
+# Hindari kelipatan 5 (5,10,15,20,25,30,35) biar ga keliatan robot
+# ============================================================
+def _random_minute():
+    """Return random menit 3-38, hindari kelipatan 5 biar ga robotik."""
+    candidates = [n for n in range(3, 39) if n % 5 != 0]
+    return random.choice(candidates)
+
+
+def _expand_window_to_hours(start, end):
+    """Expand window jam ke list jam aktif, respect lintas hari.
+    
+    Misal:
+      22-5  => [22,23,0,1,2,3,4,5] (8 jam)
+      09-17 => [9,10,11,12,13,14,15,16,17] (9 jam)
+      00-23 => [0..23] (24 jam, full day)
+      22-22 => [22] (1 jam doang)
+    """
+    start = int(start) % 24
+    end = int(end) % 24
+    hours = []
+    h = start
+    while True:
+        hours.append(h)
+        if h == end:
+            break
+        h = (h + 1) % 24
+        # safety: max 24 iterasi
+        if len(hours) > 24:
+            break
+    return hours
+
+
+def _cron_paths():
+    """Return (py, script, log) untuk cron."""
     py = os.path.join(SCRIPT_DIR, ".venv", "bin", "python3")
     script = os.path.join(SCRIPT_DIR, "superi_auto.py")
     log = os.path.join(SCRIPT_DIR, "auto_log.txt")
-    # Fallback kalau venv tidak ada
     if not os.path.exists(py):
         py = sys.executable
+    return py, script, log
+
+
+def _generate_cron_lines(window_start=None, window_end=None):
+    """Generate N baris cron random berdasarkan window jam.
+    
+    N = jumlah jam aktif (misal 22-5 = 8 baris).
+    Tiap baris: M H * * * py script >> log 2>&1 # SUPER-I-AUTO
+    Menit M random 3-38 beda tiap jam.
+    """
+    cfg = load_config()
+    if window_start is None:
+        window_start = cfg.get("auto_window_start", 22)
+    if window_end is None:
+        window_end = cfg.get("auto_window_end", 5)
+    py, script, log = _cron_paths()
+    hours = _expand_window_to_hours(window_start, window_end)
+    lines = []
+    for h in hours:
+        m = _random_minute()
+        lines.append(f"{m} {h} * * * {py} {script} >> {log} 2>&1 {CRON_MARKER}")
+    return lines
+
+
+def _cron_command():
+    """DEPRECATED: single line cron lama (5 * * * *), untuk backward-compat doc saja.
+    Sekarang pakai _generate_cron_lines() yang N baris random.
+    """
+    py, script, log = _cron_paths()
     return f"5 * * * * {py} {script} >> {log} 2>&1 {CRON_MARKER}"
 
+
 def cron_is_installed():
-    """Cek apakah cron job sudah terpasang."""
+    """Cek apakah cron job sudah terpasang (ada minimal 1 baris dengan marker)."""
     try:
         result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
         return CRON_MARKER in result.stdout
     except Exception:
         return False
 
-def cron_install():
-    """Pasang cron job (macOS/Linux)."""
+
+def cron_install(window_start=None, window_end=None):
+    """Pasang N cron job random (macOS/Linux). N = jumlah jam window."""
     try:
-        # Ambil crontab existing
         result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
         existing = result.stdout if result.returncode == 0 else ""
-        # Hapus baris lama SUPER-I-AUTO kalau ada
+        # Hapus semua baris lama SUPER-I-AUTO
         lines = [l for l in existing.splitlines() if CRON_MARKER not in l]
-        lines.append(_cron_command())
+        # Generate baru N baris sesuai window
+        new_lines = _generate_cron_lines(window_start, window_end)
+        lines.extend(new_lines)
         new_crontab = "\n".join(lines) + "\n"
-        # Tulis balik
         proc = subprocess.run(["crontab", "-"], input=new_crontab, text=True, capture_output=True)
         return proc.returncode == 0, proc.stderr
     except Exception as e:
         return False, str(e)
 
-def cron_uninstall():
-    """Hapus cron job."""
+
+def cron_count_installed():
+    """Hitung berapa baris cron dengan marker yang terpasang."""
     try:
         result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
         if result.returncode != 0:
-            return True, ""  # tidak ada crontab
+            return 0
+        return sum(1 for l in result.stdout.splitlines() if CRON_MARKER in l)
+    except Exception:
+        return 0
+
+
+def cron_uninstall():
+    """Hapus semua cron job SUPER-I-AUTO."""
+    try:
+        result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+        if result.returncode != 0:
+            return True, ""
         lines = [l for l in result.stdout.splitlines() if CRON_MARKER not in l]
         new_crontab = ("\n".join(lines) + "\n") if lines else ""
         proc = subprocess.run(["crontab", "-"], input=new_crontab, text=True, capture_output=True)
@@ -2016,41 +2096,142 @@ def cron_uninstall():
     except Exception as e:
         return False, str(e)
 
-# --- Windows Task Scheduler ---
-WIN_TASK_NAME = "SUPER-I-Auto-Input"
+# --- Windows Task Scheduler (8 task, tiap jam beda menit 3-38) ---
+def _win_task_names_for_window(window_start=None, window_end=None):
+    """Return list (task_name, hour) untuk window saat ini."""
+    cfg = load_config()
+    if window_start is None:
+        window_start = cfg.get("auto_window_start", 22)
+    if window_end is None:
+        window_end = cfg.get("auto_window_end", 5)
+    hours = _expand_window_to_hours(window_start, window_end)
+    return [(f"{WIN_TASK_PREFIX}-{h:02d}", h) for h in hours]
+
+
+def _generate_win_tasks(window_start=None, window_end=None):
+    """Generate list (task_name, hour, minute) untuk N task, menit random 3-38 beda tiap jam."""
+    cfg = load_config()
+    if window_start is None:
+        window_start = cfg.get("auto_window_start", 22)
+    if window_end is None:
+        window_end = cfg.get("auto_window_end", 5)
+    hours = _expand_window_to_hours(window_start, window_end)
+    tasks = []
+    for h in hours:
+        m = _random_minute()
+        task_name = f"{WIN_TASK_PREFIX}-{h:02d}"
+        tasks.append((task_name, h, m))
+    return tasks
+
 
 def win_task_is_installed():
+    """Cek apakah minimal 1 task dengan prefix terpasang (atau legacy single task)."""
     try:
+        # Cek legacy single
         result = subprocess.run(["schtasks", "/query", "/tn", WIN_TASK_NAME],
                                 capture_output=True, text=True)
-        return result.returncode == 0
+        if result.returncode == 0:
+            return True
+        # Cek prefix multi-task
+        result2 = subprocess.run(["schtasks", "/query", "/fo", "list"],
+                                 capture_output=True, text=True)
+        if WIN_TASK_PREFIX in result2.stdout:
+            return True
+        # Fallback: cek satu per satu untuk window default
+        for task_name, _ in _win_task_names_for_window():
+            r = subprocess.run(["schtasks", "/query", "/tn", task_name],
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                return True
+        return False
     except Exception:
         return False
 
-def win_task_install():
-    """Pasang Windows Task Scheduler (tiap 5 menit, window dicek internal)."""
+
+def win_task_count_installed():
+    """Hitung berapa task dengan prefix yang terpasang."""
+    count = 0
+    # Legacy
+    try:
+        result = subprocess.run(["schtasks", "/query", "/tn", WIN_TASK_NAME],
+                                capture_output=True, text=True)
+        if result.returncode == 0:
+            count += 1
+    except Exception:
+        pass
+    # Multi
+    for task_name, _ in _win_task_names_for_window():
+        try:
+            r = subprocess.run(["schtasks", "/query", "/tn", task_name],
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                count += 1
+        except Exception:
+            pass
+    return count
+
+
+def win_task_install(window_start=None, window_end=None):
+    """Pasang N Windows Task Scheduler, tiap jam beda menit random 3-38 (anti-robotik)."""
     bat = os.path.join(SCRIPT_DIR, "superi.bat")
     task_log = os.path.join(SCRIPT_DIR, "auto_task_log.txt")
     task_cmd = f'cmd /c cd /d "{SCRIPT_DIR}" && "{bat}" auto >> "{task_log}" 2>&1'
+    tasks = _generate_win_tasks(window_start, window_end)
+    ok_count = 0
+    last_msg = ""
+    for task_name, h, m in tasks:
+        try:
+            time_str = f"{h:02d}:{m:02d}"
+            # Hapus dulu kalau sudah ada
+            subprocess.run(["schtasks", "/delete", "/tn", task_name, "/f"],
+                           capture_output=True, text=True)
+            proc = subprocess.run([
+                "schtasks", "/create", "/tn", task_name,
+                "/tr", task_cmd,
+                "/sc", "daily",
+                "/st", time_str,
+                "/f"
+            ], capture_output=True, text=True)
+            if proc.returncode == 0:
+                ok_count += 1
+                last_msg = proc.stdout
+            else:
+                last_msg = proc.stderr or proc.stdout
+        except Exception as e:
+            last_msg = str(e)
+    # Legacy single cleanup kalau masih ada
     try:
-        # Jalankan tiap 5 menit. superi_auto.py sendiri yang cek window jam dan skip duplikat.
-        proc = subprocess.run([
-            "schtasks", "/create", "/tn", WIN_TASK_NAME,
-            "/tr", task_cmd,
-            "/sc", "minute", "/mo", "5",
-            "/f"
-        ], capture_output=True, text=True)
-        return proc.returncode == 0, proc.stderr or proc.stdout
-    except Exception as e:
-        return False, str(e)
+        subprocess.run(["schtasks", "/delete", "/tn", WIN_TASK_NAME, "/f"],
+                       capture_output=True, text=True)
+    except Exception:
+        pass
+    return ok_count == len(tasks), f"{ok_count}/{len(tasks)} terpasang: {last_msg}" if ok_count < len(tasks) else f"{ok_count} task terpasang"
+
 
 def win_task_uninstall():
+    """Hapus semua task dengan prefix SUPER-I-Auto-* + legacy single."""
+    deleted = 0
+    last_msg = ""
+    # Hapus multi-task untuk semua 24 jam (bersihkan total, bukan cuma window saat ini)
+    for h in range(24):
+        task_name = f"{WIN_TASK_PREFIX}-{h:02d}"
+        try:
+            proc = subprocess.run(["schtasks", "/delete", "/tn", task_name, "/f"],
+                                  capture_output=True, text=True)
+            if proc.returncode == 0:
+                deleted += 1
+            last_msg = proc.stderr or proc.stdout
+        except Exception as e:
+            last_msg = str(e)
+    # Hapus legacy single
     try:
         proc = subprocess.run(["schtasks", "/delete", "/tn", WIN_TASK_NAME, "/f"],
                               capture_output=True, text=True)
-        return proc.returncode == 0, proc.stderr or proc.stdout
+        if proc.returncode == 0:
+            deleted += 1
     except Exception as e:
-        return False, str(e)
+        last_msg = str(e)
+    return True, f"{deleted} task dihapus: {last_msg}" if deleted else "Tidak ada task terpasang"
 
 def scheduler_is_installed():
     """Cek apakah scheduler (cron/task) sudah terpasang sesuai OS."""
@@ -2059,39 +2240,70 @@ def scheduler_is_installed():
     return cron_is_installed()
 
 def scheduler_install_menu():
-    """Menu install/hapus jadwal otomatis sesuai OS."""
+    """Menu install/hapus jadwal otomatis sesuai OS - random 3-38 menit per jam, N baris/task sesuai window."""
     is_win = platform.system() == "Windows"
     os_name = "Windows Task Scheduler" if is_win else "cron"
     installed = scheduler_is_installed()
+    cfg = load_config()
+    win_start = cfg.get("auto_window_start", 22)
+    win_end = cfg.get("auto_window_end", 5)
+    hours = _expand_window_to_hours(win_start, win_end)
     
     clear()
     header(f"⚙  JADWAL OTOMATIS · {os_name}")
     print()
+    print(f"  {C['D']}Window saat ini: {win_start:02d}:00-{win_end:02d}:00 = {len(hours)} jam ({', '.join(f'{h:02d}' for h in hours)}){C['R']}")
+    print(f"  {C['D']}Setiap jam dapat menit random 3-38 (anti menit 5 exact robot) + jitter 2-110 detik{C['R']}")
+    print(f"  {C['D']}Jaminan: menit max 38 + jitter 110s + runtime 5 menit = selesai max 44, sisa 15 menit buffer{C['R']}")
+    print()
     if installed:
-        print(f"  {C['G']}● Jadwal otomatis SUDAH terpasang{C['R']}")
-        print(f"  {C['D']}Sistem akan memanggil auto mode tiap 5 menit (window dicek internal).{C['R']}")
+        cnt = win_task_count_installed() if is_win else cron_count_installed()
+        print(f"  {C['G']}● Jadwal otomatis SUDAH terpasang ({cnt} jadwal){C['R']}")
+        if is_win:
+            print(f"  {C['D']}N task: {WIN_TASK_PREFIX}-HH (HH={', '.join(f'{h:02d}' for h in hours)}) daily HH:MM random{C['R']}")
+        else:
+            print(f"  {C['D']}N baris cron sesuai window, tiap jam menit random 3-38{C['R']}")
     else:
         print(f"  {C['RE']}○ Jadwal otomatis BELUM terpasang{C['R']}")
     print()
-    print(f"  {C['C']}[1]{C['R']} {'Pasang ulang' if installed else 'Pasang'} jadwal otomatis")
+    print(f"  {C['C']}[1]{C['R']} {'Pasang ulang (regenerate menit random)' if installed else 'Pasang'} jadwal otomatis ({len(hours)} jadwal)")
     if installed:
         print(f"  {C['C']}[2]{C['R']} {C['RE']}Hapus{C['R']} jadwal otomatis")
+        if is_win:
+            print(f"  {C['C']}[3]{C['R']} 📋 Lihat daftar task terpasang")
+        else:
+            print(f"  {C['C']}[3]{C['R']} 📋 Lihat crontab terpasang")
     print(f"  {C['RE']}[0]{C['R']} Kembali")
     print()
     print(f"  {C['D']}{'─' * 56}{C['R']}")
     choice = input(f"  {C['B']}Pilih ▸ {C['R']}").strip()
     
     if choice == '1':
-        print(f"\n  {C['Y']}Memasang jadwal...{C['R']}")
+        print(f"\n  {C['Y']}Memasang {len(hours)} jadwal (menit random 3-38, window {win_start:02d}-{win_end:02d})...{C['R']}")
+        # Preview yang akan dipasang
+        preview_lines = _generate_cron_lines(win_start, win_end) if not is_win else []
+        preview_tasks = _generate_win_tasks(win_start, win_end) if is_win else []
         if is_win:
-            ok, msg = win_task_install()
+            for t_name, h, m in preview_tasks:
+                print(f"  {C['D']}  {t_name} -> {h:02d}:{m:02d} daily{C['R']}")
         else:
-            ok, msg = cron_install()
+            for line in preview_lines:
+                # tampilkan M H
+                parts = line.split()
+                print(f"  {C['D']}  {parts[0]} {parts[1]} * * * auto (menit {parts[0]} jam {parts[1]}){C['R']}")
+        print()
+        if is_win:
+            ok, msg = win_task_install(win_start, win_end)
+        else:
+            ok, msg = cron_install(win_start, win_end)
         if ok:
-            print(f"  {C['G']}✓ Jadwal otomatis terpasang!{C['R']}")
-            print(f"  {C['D']}Sistem akan jalankan auto mode tiap 5 menit.{C['R']}")
+            print(f"  {C['G']}✓ Jadwal otomatis terpasang! {msg}{C['R']}")
+            print(f"  {C['D']}Menit acak 3-38 per jam, tiap install beda-beda (mirip setting manual operator).{C['R']}")
             print(f"  {C['D']}Pastikan Auto Mode AKTIF + komputer menyala di window jam.{C['R']}")
-            print(f"  {C['D']}Log Task Scheduler: {os.path.join(SCRIPT_DIR, 'auto_task_log.txt')}{C['R']}")
+            if is_win:
+                print(f"  {C['D']}Log Task: {os.path.join(SCRIPT_DIR, 'auto_task_log.txt')}{C['R']}")
+            else:
+                print(f"  {C['D']}Cek: crontab -l{C['R']}")
         else:
             print(f"  {C['RE']}✗ Gagal: {msg}{C['R']}")
             if not is_win:
@@ -2104,9 +2316,43 @@ def scheduler_install_menu():
         else:
             ok, msg = cron_uninstall()
         if ok:
-            print(f"  {C['G']}✓ Jadwal otomatis dihapus{C['R']}")
+            print(f"  {C['G']}✓ {msg}{C['R']}")
         else:
             print(f"  {C['RE']}✗ Gagal: {msg}{C['R']}")
+        input(f"\n  {C['D']}[Enter]{C['R']}")
+    elif choice == '3' and installed:
+        print()
+        if is_win:
+            print(f"  {C['B']}Daftar task terpasang:{C['R']}")
+            for h in range(24):
+                task_name = f"{WIN_TASK_PREFIX}-{h:02d}"
+                try:
+                    r = subprocess.run(["schtasks", "/query", "/tn", task_name, "/fo", "list", "/v"],
+                                       capture_output=True, text=True)
+                    if r.returncode == 0:
+                        print(f"  {C['G']}● {task_name}{C['R']}")
+                        for line in r.stdout.splitlines()[:8]:
+                            print(f"    {line}")
+                except Exception:
+                    pass
+            # legacy
+            try:
+                r = subprocess.run(["schtasks", "/query", "/tn", WIN_TASK_NAME, "/fo", "list"],
+                                   capture_output=True, text=True)
+                if r.returncode == 0:
+                    print(f"  {C['Y']}⚠ Legacy masih ada: {WIN_TASK_NAME}{C['R']}")
+            except Exception:
+                pass
+        else:
+            print(f"  {C['B']}Crontab terpasang:{C['R']}")
+            try:
+                r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+                for line in r.stdout.splitlines():
+                    if CRON_MARKER in line or "superi_auto" in line:
+                        marker = f"{C['G']}●{C['R']}" if CRON_MARKER in line else f"{C['Y']}○{C['R']}"
+                        print(f"  {marker} {line}")
+            except Exception as e:
+                print(f"  {C['RE']}✗ {e}{C['R']}")
         input(f"\n  {C['D']}[Enter]{C['R']}")
 
 def auto_mode_menu():
@@ -2177,14 +2423,33 @@ def auto_mode_menu():
             print()
             print(f"  {C['D']}Window jam = rentang waktu auto mode aktif{C['R']}")
             print(f"  {C['D']}Contoh: 22-5 = jalan jam 22:00 sampai 05:00 (lintas hari){C['R']}")
+            print(f"  {C['D']}Sekarang: {win_start:02d}:00-{win_end:02d}:00 = {len(_expand_window_to_hours(win_start, win_end))} jam aktif{C['R']}")
+            print(f"  {C['D']}Setelah ganti window, jadwal cron/task yang sudah terpasang harus dipasang ulang biar ngikut jam baru{C['R']}")
             try:
                 s = int(input(f"  Mulai (jam 0-23) [{win_start}]: ").strip() or win_start)
                 e = int(input(f"  Akhir (jam 0-23) [{win_end}]: ").strip() or win_end)
                 if 0 <= s <= 23 and 0 <= e <= 23:
+                    old_hours = _expand_window_to_hours(win_start, win_end)
+                    new_hours = _expand_window_to_hours(s, e)
                     cfg["auto_window_start"] = s
                     cfg["auto_window_end"] = e
                     save_config(cfg)
-                    print(f"\n  {C['G']}✓ Window: {s:02d}:00 - {e:02d}:00{C['R']}")
+                    print(f"\n  {C['G']}✓ Window: {s:02d}:00 - {e:02d}:00 = {len(new_hours)} jam ({', '.join(f'{h:02d}' for h in new_hours)}){C['R']}")
+                    # Jika jadwal sudah terpasang dan window berubah, tawarkan reinstall
+                    if scheduler_is_installed() and old_hours != new_hours:
+                        print(f"  {C['Y']}Jadwal lama {len(old_hours)} jadwal, baru {len(new_hours)} jadwal. Perlu pasang ulang biar ngikut jam baru.{C['R']}")
+                        ans = input(f"  Pasang ulang jadwal sekarang? (Y/n): ").strip().lower()
+                        if ans in ("", "y", "yes"):
+                            is_win = platform.system() == "Windows"
+                            print(f"  {C['Y']}Memasang ulang...{C['R']}")
+                            if is_win:
+                                ok, msg = win_task_install(s, e)
+                            else:
+                                ok, msg = cron_install(s, e)
+                            if ok:
+                                print(f"  {C['G']}✓ Jadwal terpasang ulang: {msg}{C['R']}")
+                            else:
+                                print(f"  {C['RE']}✗ Gagal pasang ulang: {msg}{C['R']}")
                 else:
                     print(f"\n  {C['RE']}✗ Jam harus 0-23{C['R']}")
             except ValueError:

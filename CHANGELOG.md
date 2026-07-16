@@ -5,6 +5,50 @@ Semua perubahan penting pada project ini akan didokumentasikan di file ini.
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0),
 dan project ini menggunakan [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.2.4] — 2026-07-16
+
+### Fixed
+
+- **Cron masih kaku `5 * * * *` + `tiap 5 menit` Windows terdeteksi robot, log spam `di luar window` & `sudah terisi`.**
+  - Sebelumnya macOS: `_cron_command()` = `5 * * * *` 1 baris, jalan 24x sehari, 16x spam `Jam X di luar window Skip`. Windows: `/sc minute /mo 5` = 288x sehari, 88x spam `sudah terisi Skip` per malam.
+  - Sekarang **N baris cron random 3-38 menit per jam, berdasarkan window dinamis** (bukan hardcoded 8 baris):
+    - `_random_minute()`: random 3-38 hindari kelipatan 5 (5,10,15,20,25,30,35) biar ga keliatan bot.
+    - `_expand_window_to_hours(start, end)`: expand lintas hari `22-5 => [22,23,0,1,2,3,4,5]` (8 jam), `09-17 => 9 jam`, `00-23 => 24 jam`.
+    - `_generate_cron_lines(window_start, window_end)`: baca window dari `.superi_config.json`, generate N baris `M H * * * py auto.py # SUPER-I-AUTO` dengan M random 3-38 beda tiap jam. Setiap install regenerasi, jadi `crontab -l` keliatan setting manual operator (12 22, 7 23, 33 0...).
+    - `cron_install(window_start, window_end)`: hapus semua baris lama marker, pasang N baris baru. `cron_count_installed()` hitung berapa baris.
+    - `cron_is_installed()` tetap cek marker.
+    - **Anti-telat jaminan matematik:** menit max 38 + jitter max 110 detik + runtime max 5 menit = selesai max 44.8 menit, sisa 15 menit buffer sebelum jam berikutnya. Dulu 5 exact rawan kalau sleep panjang.
+  - **Windows Task Scheduler 8 task random (sesuai request super stealth), tiap jam beda menit:**
+    - `WIN_TASK_PREFIX = "SUPER-I-Auto"` + legacy `WIN_TASK_NAME` untuk backward-compat.
+    - `_win_task_names_for_window()` & `_generate_win_tasks()`: generate `SUPER-I-Auto-22 22:12 daily`, `SUPER-I-Auto-23 23:07`... N task sesuai window.
+    - `win_task_install()`: loop hapus dulu N task lama, pasang N baru daily `HH:MM` random, cleanup legacy single `SUPER-I-Auto-Input`. Return `ok_count == len(tasks)`.
+    - `win_task_is_installed()`: cek legacy + cek prefix multi-task + cek 1 per 1.
+    - `win_task_count_installed()` & `win_task_uninstall()`: hapus 24 jam + legacy, bersih total.
+    - Hasil Task Scheduler: `SUPER-I-Auto-22 22:12`, `23:07`, `00:33`... mirip operator bikin manual 8 task.
+  - **Menu `[7] Pasang Jadwal Otomatis` & `[2] Atur Window` diperbarui:**
+    - `[7]` tampilkan window saat ini + jumlah jam + preview M H random yang akan dipasang + info anti-telat 44.8 menit + lihat daftar crontab/task.
+    - `[2] Atur Window`: setelah save, kalau scheduler sudah terpasang dan hours berubah, tanya `Pasang ulang jadwal sekarang? (Y/n)` biar cron/task ngikut jam baru (tidak perlu manual hapus).
+  - **`superi_auto.py run_auto()` anti-nyebrang jam:**
+    - Fix order: `now_before = datetime`, `jam = now_before.hour`, `_h_initial_jitter()`, `now_after = datetime`, jika `now_after.hour != jam` log WARN tapi tetap pakai logical jam awal (periode benar, foto backdate plausible telat).
+    - Log `Jam X di luar window Skip` yang sebelumnya INFO spam 16x sehari jadi **silent return** (tidak masuk `auto_log.txt`) karena cron baru sudah window-only, hampir tidak pernah kepanggil di luar jam. `auto_log.txt` bersih cuma isi `OK` bukan 88 spam.
+  - **Dokumentasi & Test:**
+    - `AUTO_MODE.md`: contoh 1 baris `5 22-23,0-5` diganti 8 baris random `12 22`, `7 23`, `33 0` + penjelasan 3-38 + jaminan 44 menit + Windows 8 task.
+    - `tests/test_auto_mode.py`: tambah `CronRandomAntiRobotTests` 5 test (`_random_minute` range 3-38 not multiple 5, `_expand_window_to_hours` normal/cross-midnight, cron jitter+minute <50 menit, generate lines uses random, win 8 tasks unique hours) + update `WindowsLauncherStaticTests` ke 8 task daily random.
+    - Total 86 → 92 tests OK.
+
+### Changed
+
+- `superi_app.py`: tambah `import random`, refactor total cron/task logic window-aware random, menu jadwal & window.
+- `superi_auto.py`: anti-telat fix + silent log window.
+- `AUTO_MODE.md`: update panduan macOS & Windows.
+
+### Verified
+
+- `22-05` => 8 baris cron `11 22, 28 23, 12 0, 6 1, 38 2, 8 3, 36 4, 28 5` random tiap install beda.
+- `09-17` => 9 task Windows `22:12,23:07,00:33` etc menit 3-38 no multiple 5.
+- Maths `38 + 110s + 300s = 44.8 menit < 50` PASS, buffer 15 menit.
+- 92 tests OK (47 CLI + 18 auto mode baru + 27 humanizer).
+
 ## [1.2.3] — 2026-07-16
 
 ### Fixed
