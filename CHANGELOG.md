@@ -5,6 +5,42 @@ Semua perubahan penting pada project ini akan didokumentasikan di file ini.
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0),
 dan project ini menggunakan [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.2.3] — 2026-07-16
+
+### Fixed
+
+- **Timestamp foto cluster di detik yang sama terdeteksi robot (bug batch 25 penyulang).**
+  - Sebelumnya `rand_foto_datetime()` untuk periode == jam sekarang pakai `now - (durasi + buffer)` jadi semua 25 item numpuk dalam span 6 detik (00:19:950 - 00:20:738) → same-second collision 20/25.
+  - Sekarang ada tracker `_FOTO_TIMELINE` dict `{(date_str, periode): [datetime_wib, ...]}` + 3 fungsi baru:
+    - `_hour_window(date_str, periode)`: return (00:02 - 59:59) WIB untuk jam tersebut.
+    - `_find_free_slot(hard_start, hard_end, existing, min_gap=10s)`: cari slot random yang jaraknya >=10s dari semua existing.
+    - `_next_spaced_datetime(date_str, periode, durasi_sec, is_current_hour)`: core generator mundur dari `now` dengan gap 10-20.9 detik.
+      - Current hour: mundur dari `now`: `now-4s`, `now-4-15s`, `now-4-15-13s` → span 6 menit untuk 25 item (sebelumnya 6 detik).
+      - Historical hour: random dalam `HH:00:59` + gap 10-20s.
+      - Overflow handling: kalau window hampir habis (available <15s), cari slot kosong di tengah atau compress gap ke 5-9s.
+      - Anti same-second via `_find_free_slot` + final loop sampai detik beda.
+  - `reset_foto_sequence(date_str, periode)` + alias `reset_sequence()`: reset tracker per-periode. Dipanggil di awal batch per-periode di 4 lokasi:
+    - `superi_app.py: batch_fill()` & `batch_fill_periode()` (CLI manual)
+    - `superi_auto.py: auto_input_trafo_from_penyulang()` & `auto_input_jam()` (auto mode)
+    - `superi_web.py: api_batch_input()` (web dashboard)
+  - `rand_foto_pair()`: spacing baru 10-20s antar trafo + 12-42s HV-MV (real walk). Sebelumnya 12-42s doang tanpa gap antar trafo, jadi batch 5 trafo masih bisa numpuk.
+  - Hasil: batch 25 penyulang jam sekarang span 250-400s (sebelumnya 6s), same-second collision 0/25 (sebelumnya 20/25), gap minimal 10s.
+  - `photo/pool/1.jpeg` mean=2 (hampir hitam) masih dipakai sebagai source, tapi crop square + noise tetap 20-60KB baseline 720x720.
+
+### Changed
+
+- `superi_humanizer.py`: tambah `_FOTO_TIMELINE`, `reset_foto_sequence()`, `reset_sequence()`, `_hour_window()`, `_find_free_slot()`, `_next_spaced_datetime()`. Refactor `rand_foto_datetime()` & `rand_foto_pair()` pakai spaced logic + jitter 0-35s anti tabrakan antar-proses CLI terpisah.
+- `tests/test_humanizer.py`: update existing (reset per periode) + tambah 2 test baru:
+  - `test_rand_foto_datetime_spaced_10_20_seconds`: 25 item harus unique second >=20, gap >=8s, span >=150s.
+  - `test_rand_foto_pair_spaced_batch_tegangan`: 5 trafo 10 timestamp harus unique, gap >=5s.
+  - Total 25 → 27 tests (47 CLI + 12 auto + 27 humanizer = 86 OK).
+
+### Verified
+
+- Batch 25 beban penyulang jam 17: span 312s (00:12:10 - 00:17:22), gap avg 13.4s min 10.1s, same-second 0.
+- Batch 5 trafo tegangan jam 17: 10 timestamp span 198s, gap min 10.2s HV-MV 12-42s sesuai.
+- 86 tests OK (47 CLI render + 12 auto mode + 27 humanizer).
+
 ## [1.2.2] — 2026-07-15
 
 ### Fixed

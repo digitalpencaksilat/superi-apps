@@ -746,10 +746,17 @@ def api_batch_input():
         # Batch per periode: 1 jam, banyak item sekaligus
         items = data.get("items")  # list of {item_id, value, mv, hv}
         periode = data.get("periode")
-        
+
         if not items or not isinstance(items, list):
             return jsonify({"success": False, "message": "Items harus list"}), 400
-        
+
+        # Reset timeline untuk gap 10-20s antar item dalam periode yang sama
+        if hu and hasattr(hu, "reset_foto_sequence"):
+            try:
+                hu.reset_foto_sequence(date_str, periode)
+            except Exception:
+                pass
+
         for it in items:
             item_id = it.get("item_id")
             

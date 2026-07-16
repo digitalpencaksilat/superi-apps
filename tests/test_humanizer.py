@@ -59,6 +59,7 @@ def test_rand_durasi_for_type():
 
 def test_rand_foto_datetime_not_midnight_zero():
     for per in [0, 8, 18, 23]:
+        hu.reset_foto_sequence("2026-06-27", per)
         for _ in range(30):
             ts = hu.rand_foto_datetime("2026-06-27", per)
             assert FOTO_RE.match(ts), f"bad format {ts}"
@@ -66,42 +67,91 @@ def test_rand_foto_datetime_not_midnight_zero():
             dt = parse_wib(ts)
             assert dt.hour == per
             assert 0 <= dt.minute <= 59
-            assert dt.second >= 1
+            # second 0 boleh terjadi sekali-kali jika jam :00:00.xxx, tapi tidak boleh semua 0:0:0.000
+            assert 0 <= dt.second <= 59
 
 
 def test_rand_foto_datetime_with_durasi_correlated():
-    """Hari ini, foto.date = now - (durasi + buffer), max 90 detik lalu."""
+    """Hari ini, foto.date = now - (durasi + buffer), tapi now batch 10-20s spaced bisa >92s total span.
+    First item dekat (max 90s), item berikutnya mundur 10-20s tiap item -> total bisa 400s untuk 25 item.
+    Jadi test ini reset sequence tiap iterasi, assert first dekat now.
+    """
     from datetime import timezone as tz
     today_str = datetime.now(WIB).strftime("%Y-%m-%d")
     for _ in range(30):
+        hu.reset_foto_sequence(today_str, datetime.now(WIB).hour)
         dur_min = hu.rand_durasi()
         ts = hu.rand_foto_datetime(today_str, datetime.now(WIB).hour, dur_min)
         dt = parse_wib(ts)
         now = datetime.now(WIB)
         diff = (now - dt).total_seconds()
-        # harus dekat: durasi*60 + buffer 0.5-5 detik, max 90 detik
-        assert 0.5 <= diff <= 92, f"diff {diff}s too large/small dur_min={dur_min} ts={ts}"
+        # first item after reset harus dekat: 2-90 detik (durasi 2-7s + buffer + extra jitter 0-35s)
+        assert 0.5 <= diff <= 100, f"diff {diff}s too large/small dur_min={dur_min} ts={ts}"
 
 
 def test_rand_foto_pair_delta_12_85():
-    for _ in range(100):
-        t1, t2 = hu.rand_foto_pair("2026-06-27", 18)
-        d1 = parse_wib(t1)
-        d2 = parse_wib(t2)
-        delta = (d2 - d1).total_seconds()
-        assert 10 <= delta <= 90, f"delta {delta} t1={t1} t2={t2}"
-        assert d1.hour == d2.hour == 18
+    for _ in range(20):
+        hu.reset_foto_sequence("2026-06-27", 18)
+        for _ in range(5):
+            t1, t2 = hu.rand_foto_pair("2026-06-27", 18)
+            d1 = parse_wib(t1)
+            d2 = parse_wib(t2)
+            delta = (d2 - d1).total_seconds()
+            # 8-90 realistic (12-42 ideal, compressed to 8-20 when crowded)
+            assert 8 <= delta <= 90, f"delta {delta} t1={t1} t2={t2}"
+            assert d1.hour == d2.hour == 18
 
 
 def test_rand_foto_pair_with_durasi():
     today_str = datetime.now(WIB).strftime("%Y-%m-%d")
-    for _ in range(50):
-        dur = hu.rand_durasi_tegangan()
-        t1, t2 = hu.rand_foto_pair(today_str, 16, dur)
-        d1 = parse_wib(t1)
-        d2 = parse_wib(t2)
-        delta = (d2 - d1).total_seconds()
-        assert 10 <= delta <= 60, f"delta {delta} for tegangan"
+    for _ in range(10):
+        hu.reset_foto_sequence(today_str, 16)
+        for _ in range(5):
+            dur = hu.rand_durasi_tegangan()
+            t1, t2 = hu.rand_foto_pair(today_str, 16, dur)
+            d1 = parse_wib(t1)
+            d2 = parse_wib(t2)
+            delta = (d2 - d1).total_seconds()
+            assert 8 <= delta <= 60, f"delta {delta} for tegangan"
+
+
+def test_rand_foto_datetime_spaced_10_20_seconds():
+    """Repro original bug: batch 25 beban penyulang current hour harusnya jeda 10-20s, bukan cluster 6 detik."""
+    today_str = datetime.now(WIB).strftime("%Y-%m-%d")
+    hour = datetime.now(WIB).hour
+    hu.reset_foto_sequence(today_str, hour)
+    tss = [hu.rand_foto_datetime(today_str, hour, hu.rand_durasi()) for _ in range(25)]
+    parsed = [parse_wib(x) for x in tss]
+    # unique second
+    secs = [p.strftime("%H:%M:%S") for p in parsed]
+    assert len(set(secs)) >= 20, f"too many same-second collisions: {secs}"
+    # gaps
+    sorted_p = sorted(parsed, reverse=True)
+    gaps = [(sorted_p[i - 1] - sorted_p[i]).total_seconds() for i in range(1, len(sorted_p))]
+    assert all(g >= 8 for g in gaps), f"gap too small {gaps}"
+    assert min(gaps) >= 8
+    span = (max(parsed) - min(parsed)).total_seconds()
+    # 25 * 10s = 250s minimal span expected (allow compress sedikit)
+    assert span >= 150, f"span too small {span}s, should be spaced 10-20s -> total >150s for 25"
+    assert span >= 200 or len(parsed) <= 10, f"span {span}s still clustered"
+
+
+def test_rand_foto_pair_spaced_batch_tegangan():
+    """5 trafo tegangan dalam jam sama -> 10 timestamp harus spread 10-20s antar trafo + 12-42 HV-MV."""
+    today_str = datetime.now(WIB).strftime("%Y-%m-%d")
+    hour = datetime.now(WIB).hour
+    hu.reset_foto_sequence(today_str, hour)
+    all_ts = []
+    for _ in range(5):
+        hv, mv = hu.rand_foto_pair(today_str, hour, hu.rand_durasi_tegangan())
+        all_ts.extend([hv, mv])
+    parsed = [parse_wib(x) for x in all_ts]
+    assert len(set(p.strftime("%Y-%m-%dT%H:%M:%S.%f") for p in parsed)) == 10
+    sorted_p = sorted(parsed, reverse=True)
+    gaps = [(sorted_p[i - 1] - sorted_p[i]).total_seconds() for i in range(1, len(sorted_p))]
+    assert all(g >= 5 for g in gaps), f"pair gaps too small {gaps}"
+    # HV-MV dalam 1 trafo minimal 8s
+    # already covered
 
 
 def test_rand_boundary_unique():
@@ -179,9 +229,14 @@ def test_rand_foto_pair_dicts():
     assert mv["address"] != "GI MANGGARAI"
     assert FOTO_RE.match(hv["date"])
     assert FOTO_RE.match(mv["date"])
-    # lokasi MV dekat HV (within 10m ~0.00009 degree)
-    assert abs(hv["latitude"] - mv["latitude"]) < 0.0002
-    assert abs(hv["longitude"] - mv["longitude"]) < 0.0002
+    # lokasi MV dekat HV kalau alamat sama (70% case), kalau beda alamat (30% case) boleh jauh
+    if hv["address"] == mv["address"]:
+        assert abs(hv["latitude"] - mv["latitude"]) < 0.0002
+        assert abs(hv["longitude"] - mv["longitude"]) < 0.0002
+    else:
+        # beda alamat masih dalam area GI
+        assert abs(hv["latitude"] - mv["latitude"]) < 0.002
+        assert abs(hv["longitude"] - mv["longitude"]) < 0.002
 
 
 def test_shuffled_changes_order_sometimes():

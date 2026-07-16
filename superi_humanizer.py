@@ -711,8 +711,36 @@ def rand_foto_dict_compat(*args, **kwargs):
 
 
 # ============================================================
-# FOTO DATETIME - KORELASI DENGAN DURASI
+# FOTO DATETIME - KORELASI DENGAN DURASI + ANTI-ROBOT SPACING 10-20 DETIK
 # ============================================================
+
+# Tracker untuk menghindari timestamp duplikat dalam 1 batch periode yang sama.
+# Struktur: {(date_str, periode): [datetime_wib, ...]} urutan insert, oldest = min()
+_FOTO_TIMELINE: dict = {}
+
+
+def reset_foto_sequence(date_str: str = None, periode: int = None):
+    """Reset tracker foto sequence. Dipanggil di awal batch per-periode.
+
+    - reset_foto_sequence() -> clear semua
+    - reset_foto_sequence("2026-07-15", 17) -> clear periode 17 saja
+    """
+    if date_str is None and periode is None:
+        _FOTO_TIMELINE.clear()
+    else:
+        if periode is None:
+            # clear semua periode di tanggal tersebut
+            keys = [k for k in _FOTO_TIMELINE.keys() if k[0] == date_str]
+            for k in keys:
+                _FOTO_TIMELINE.pop(k, None)
+        else:
+            _FOTO_TIMELINE.pop((date_str, int(periode)), None)
+
+
+# Backward-compat alias yang dipakai beberapa modul mungkin import reset_sequence
+def reset_sequence(date_str: str = None, periode: int = None):
+    return reset_foto_sequence(date_str, periode)
+
 
 def _rand_minute_second_ms():
     mm = random.randint(2, 54)
@@ -731,23 +759,153 @@ def _local_period_datetime(date_str: str, periode: int) -> datetime:
     return datetime(date.year, date.month, date.day, periode, mm, ss, ms * 1000, tzinfo=_WIB)
 
 
-def rand_foto_datetime(date_str: str, periode: int, durasi_min: float = None) -> str:
-    """Foto datetime realistis, korelasi dengan durasi jika disediakan.
+def _hour_window(date_str: str, periode: int):
+    """Return (hour_start, hour_end) WIB datetime untuk jam tersebut."""
+    safe = max(0, min(23, int(periode)))
+    d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    start = datetime(d.year, d.month, d.day, safe, 0, 2, random.randint(80, 970) * 1000, tzinfo=_WIB)
+    end = datetime(d.year, d.month, d.day, safe, 59, 59, random.randint(80, 970) * 1000, tzinfo=_WIB)
+    return start, end
 
-    - Jika date_str == hari ini DAN durasi_min ada:
-        foto.date = now - (durasi*60 detik + buffer 0.5-2.5 detik)
-        -> konsisten: durasi 4 detik berarti foto diambil 4 detik lalu
-    - Jika date_str == hari ini tanpa durasi:
-        foto = now - random(2, 12) detik (cepat)
-    - Jika date_str historis:
-        random menit/detik dalam jam periode
+
+def _find_free_slot(hard_start: datetime, hard_end: datetime, existing: list, min_gap: float = 10.0, max_attempts: int = 80):
+    """Cari slot random di [hard_start, hard_end] yang min_gap dari semua existing."""
+    span = (hard_end - hard_start).total_seconds()
+    if span <= 10:
+        return None
+    for _ in range(max_attempts):
+        sec = random.uniform(5.0, max(5.0, span - 5.0))
+        cand = hard_start + timedelta(seconds=sec, milliseconds=random.randint(0, 900))
+        if all(abs((cand - e).total_seconds()) >= min_gap for e in existing):
+            return cand
+    return None
+
+
+def _next_spaced_datetime(date_str: str, periode: int, durasi_sec: float = None, is_current_hour: bool = False):
+    """Core generator: timestamp berikutnya dengan jeda 10-20 detik dari timestamp terakhir.
+
+    - Untuk periode == now.hour (is_current_hour True): generate mundur dari now, gap 10-20s
+      contoh: now-4s, now-4-15s, now-4-15-13s dst -> span 6 menit untuk 25 item
+    - Untuk periode historis: tetap sebar dalam jam 00-59, gap 10-20s minimal
+    """
+    safe_periode = max(0, min(23, int(periode)))
+    now = datetime.now(_WIB)
+    key = (date_str, safe_periode)
+
+    d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    h_start, h_end = _hour_window(date_str, safe_periode)
+    if is_current_hour:
+        hard_start = h_start
+        hard_end = now
+    else:
+        hard_start = h_start
+        hard_end = h_end
+
+    existing = _FOTO_TIMELINE.get(key, [])
+    # hard_start minimal 2 detik setelah 00:00 agar tidak 00:00.000
+    if hard_start.second < 2:
+        hard_start = hard_start + timedelta(seconds=random.randint(2, 8))
+
+    if not existing:
+        if is_current_hour:
+            buf = random.uniform(0.5, 2.8)
+            base_offset = (durasi_sec or random.uniform(2.5, 6.0)) + buf
+            # Tambahkan jitter ekstra 0-35s agar antar-proses (CLI terpisah) tidak tabrakan di detik yang sama
+            extra = random.uniform(0, 35.0)
+            total_offset = base_offset + extra
+            # Pastikan tidak lebih dari available window, minimal 90s max untuk first
+            max_allowed = (hard_end - hard_start).total_seconds() - 5
+            total_offset = min(total_offset, max(25.0, max_allowed * 0.15))  # first item 5-35% dari available atau min 25s
+            # Random lagi untuk first agar tidak selalu di ujung
+            total_offset = random.uniform(min(5.0, total_offset), total_offset)
+            total_offset = max(2.0, total_offset)
+            cand = hard_end - timedelta(seconds=total_offset, milliseconds=random.randint(50, 900))
+            if cand < hard_start:
+                cand = hard_start + timedelta(seconds=random.uniform(10, 120), milliseconds=random.randint(50, 900))
+        else:
+            cand = _local_period_datetime(date_str, safe_periode)
+        # simpan
+        _FOTO_TIMELINE.setdefault(key, []).append(cand)
+        return cand
+
+    oldest = min(existing)  # timestamp paling lama (paling kecil) -> next harus lebih lama lagi (mundur)
+    # Untuk current hour, kita mundur terus dari oldest
+    attempts = 0
+    while attempts < 60:
+        gap = random.uniform(10.0, 20.0) + random.uniform(0.0, 0.9)  # 10-20.9 detik sesuai request
+        # Kalau sudah banyak item dan window sempit, compress gap sedikit
+        if is_current_hour:
+            available = (oldest - hard_start).total_seconds()
+            if available < 15:
+                # window hampir habis, coba cari slot kosong di tengah
+                free = _find_free_slot(hard_start, hard_end, existing, min_gap=8.0)
+                if free:
+                    _FOTO_TIMELINE[key].append(free)
+                    return free
+                # compress gap ke 5-9 detik sebagai last resort
+                gap = random.uniform(5.0, 9.5)
+
+        cand = oldest - timedelta(seconds=gap, milliseconds=random.randint(50, 900))
+
+        if cand < hard_start:
+            # overflow sebelum jam mulai -> cari slot kosong di antara existing
+            free = _find_free_slot(hard_start, hard_end, existing, min_gap=8.0)
+            if free:
+                _FOTO_TIMELINE[key].append(free)
+                return free
+            # jika tidak ada slot kosong, compress dan letakkan di awal jam + jitter
+            cand = hard_start + timedelta(seconds=random.uniform(2, 60), milliseconds=random.randint(50, 900))
+            # pastikan tidak tabrakan same-second
+            if all(abs((cand - e).total_seconds()) >= 3 for e in existing):
+                _FOTO_TIMELINE[key].append(cand)
+                return cand
+            attempts += 1
+            continue
+
+        # cek gap minimal 8s dari semua (ideal 10s, tapi 8s minimum anti same-second UI)
+        min_gap_needed = 8.0 if len(existing) > 25 else 10.0
+        if all(abs((cand - e).total_seconds()) >= min_gap_needed for e in existing):
+            _FOTO_TIMELINE[key].append(cand)
+            return cand
+
+        # kalau historis, coba random slot
+        if not is_current_hour:
+            cand = _local_period_datetime(date_str, safe_periode)
+            if all(abs((cand - e).total_seconds()) >= min_gap_needed for e in existing):
+                _FOTO_TIMELINE[key].append(cand)
+                return cand
+
+        attempts += 1
+
+    # fallback last resort: paksa mundur dengan gap kecil tapi pastikan detik tidak sama persis
+    cand = oldest - timedelta(seconds=random.uniform(6, 12), milliseconds=random.randint(50, 900))
+    if cand < hard_start:
+        cand = hard_start + timedelta(seconds=random.uniform(1, 20))
+    # anti same-second: loop sampai detik beda
+    tries = 0
+    while any(abs((cand - e).total_seconds()) < 2 for e in existing) and tries < 20:
+        cand -= timedelta(seconds=random.uniform(1, 3))
+        if cand < hard_start:
+            cand = hard_start + timedelta(seconds=random.uniform(5, 90))
+        tries += 1
+    _FOTO_TIMELINE[key].append(cand)
+    return cand
+
+
+def rand_foto_datetime(date_str: str, periode: int, durasi_min: float = None) -> str:
+    """Foto datetime realistis + anti-robot spacing 10-20 detik.
+
+    - Jika date_str == hari ini:
+        * periode == jam sekarang: timestamp mundur dari now dengan gap 10-20s
+          (foto1 = now-4s, foto2 = foto1-15s, dst) -> tidak lagi cluster 6 detik
+        * periode < jam sekarang: random dalam jam + gap 10-20s antar item
+    - Jika date_str historis: random menit/detik dalam jam periode + gap 10-20s
     Format: YYYY-MM-DDTHH:MM:SS.mmmZ
     """
     safe_periode = max(0, min(23, int(periode)))
     now = datetime.now(_WIB)
     today_str = now.strftime("%Y-%m-%d")
 
-    # Hitung durasi detik untuk korelasi
     durasi_sec = None
     if durasi_min is not None:
         try:
@@ -755,71 +913,154 @@ def rand_foto_datetime(date_str: str, periode: int, durasi_min: float = None) ->
         except:
             durasi_sec = None
 
-    if date_str == today_str:
+    is_today = (date_str == today_str)
+    is_current_hour = is_today and safe_periode == now.hour
+    is_past_hour_today = is_today and safe_periode < now.hour
+
+    # Untuk periode yang sudah lewat hari ini (mis P09 jam 17), tetap anggap bukan current_hour,
+    # tapi pakai logic spaced random dalam jam tersebut (lebih realistis operator foto jam 09 pagi)
+    # -> _next_spaced akan pakai hour window 09:00-09:59
+
+    # Jika periode malam yang belum lewat (safe_periode > now.hour) tapi hari ini,
+    # itu edge (input masa depan jam 20 padahal sekarang jam 17) -> pakai logic current_hour tapi cap ke hour_end
+    if is_today and safe_periode > now.hour:
+        # masa depan hari ini -> treat sebagai historical random dalam jam tersebut (tidak pakai now)
+        is_current_hour = False
+
+    if is_current_hour or is_past_hour_today or not is_today or True:
+        # Semua jalur sekarang lewat spaced generator agar 10-20s terjamin
+        # (dulu ada branch now-durasi yang bikin cluster)
+        capture = _next_spaced_datetime(date_str, safe_periode, durasi_sec, is_current_hour=is_current_hour)
+    else:
+        # fallback lama (tidak dipakai lagi, tapi keep untuk safety)
         if durasi_sec is not None and durasi_sec > 0:
-            # Korelasi: foto diambil durasi + buffer lalu
             buffer = random.uniform(0.5, 2.8)
             total_offset = durasi_sec + buffer
-            # Clamp: jangan lebih dari 90 detik lalu untuk hari ini
             total_offset = min(total_offset, 85.0)
             capture = now - timedelta(seconds=total_offset, milliseconds=random.randint(50, 900))
         else:
-            # Fallback minimal: 2-12 detik lalu untuk P>=now, atau random dalam jam untuk P<now
             if safe_periode >= now.hour:
                 capture = now - timedelta(seconds=random.uniform(2.0, 12.0), milliseconds=random.randint(50, 900))
             else:
                 capture = _local_period_datetime(date_str, safe_periode)
-    else:
-        capture = _local_period_datetime(date_str, safe_periode)
 
     return _format_utc(capture)
 
 
 def rand_foto_pair(date_str: str, periode: int, durasi_min: float = None):
-    """Dua timestamp HV/MV, korelasi dengan durasi.
+    """Dua timestamp HV/MV dengan spacing 10-20 detik antar trafo + 12-42 detik HV-MV.
 
-    - Jika durasi ada: first = now - durasi - buffer, second = first + 12-40 detik (HV->MV)
-    - Selisih HV-MV 12-40 detik realistis (manual)
-    - Keduanya dekat now untuk hari ini (max 45 detik lalu)
+    Baru:
+    - Gap antar input trafo: 10-20 detik (MV_prev -> HV_next = 10-20s)
+    - Gap dalam 1 trafo (HV->MV): 12-42 detik (real walk)
+    - Total untuk 5 trafo: ~ (15+25)*5 = 200 detik = 3 menit sebaran
+
+    Implementasi mundur dari now (per batch):
+    MV = oldest - gap_inter (10-20s)
+    HV = MV - gap_pair (12-42s)
+    Jadi urutan waktu real: HV older, MV newer (HV diambil dulu, jalan ke MV)
     """
     safe_periode = max(0, min(23, int(periode)))
     now = datetime.now(_WIB)
     today_str = now.strftime("%Y-%m-%d")
+    key = (date_str, safe_periode)
 
-    durasi_sec = None
-    if durasi_min is not None:
-        try:
-            durasi_sec = float(durasi_min) * 60.0
-        except:
-            durasi_sec = None
+    is_today = (date_str == today_str)
+    is_current_hour = is_today and safe_periode == now.hour
 
-    if date_str == today_str:
-        if durasi_sec is not None and durasi_sec > 0:
-            buffer = random.uniform(0.8, 3.0)
-            total_offset = durasi_sec + buffer
-            total_offset = min(total_offset, 90.0)
-            first = now - timedelta(seconds=total_offset, milliseconds=random.randint(50, 900))
-        else:
-            # fallback: 8-20 detik lalu
-            first = now - timedelta(seconds=random.uniform(8.0, 22.0), milliseconds=random.randint(50, 900))
+    d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    h_start, h_end = _hour_window(date_str, safe_periode)
 
-        # Jika periode sudah lewat (safe_periode < now.hour), pakai jam tersebut tapi tetap dekat
-        if safe_periode < now.hour:
-            # 70% chance pakai jam historis, 30% pakai now-based (biar variasi)
-            if random.random() < 0.7:
-                first = _local_period_datetime(date_str, safe_periode)
-
-        delta = random.randint(12, 42)
-        second = first + timedelta(seconds=delta, milliseconds=random.randint(80, 850))
-        if second >= now:
-            second = now - timedelta(seconds=random.uniform(2.0, 8.0))
-            first = second - timedelta(seconds=delta)
+    if is_current_hour:
+        hard_start = h_start
+        hard_end = now
     else:
-        first = _local_period_datetime(date_str, safe_periode)
-        delta = random.randint(12, 55)
-        second = first + timedelta(seconds=delta, milliseconds=random.randint(80, 850))
+        hard_start = h_start
+        hard_end = h_end
 
-    return _format_utc(first), _format_utc(second)
+    existing = _FOTO_TIMELINE.get(key, [])
+
+    if not existing:
+        # First pair: buat dekat now atau random dalam jam
+        durasi_sec = None
+        if durasi_min is not None:
+            try:
+                durasi_sec = float(durasi_min) * 60.0
+            except:
+                durasi_sec = None
+        gap_inter = random.uniform(10.0, 20.0)
+        gap_pair = random.randint(12, 42)
+        if is_current_hour:
+            buf = random.uniform(0.8, 3.0)
+            total_offset = (durasi_sec or random.uniform(10, 22)) + buf
+            mv = hard_end - timedelta(seconds=random.uniform(2.0, 8.0), milliseconds=random.randint(50, 900))
+            hv = mv - timedelta(seconds=gap_pair, milliseconds=random.randint(80, 850))
+        else:
+            # historical: random HV, MV = HV+delta
+            hv = _local_period_datetime(date_str, safe_periode)
+            mv = hv + timedelta(seconds=gap_pair, milliseconds=random.randint(80, 850))
+            # clamp MV still in same hour (< :59)
+            if mv.hour != safe_periode or mv > hard_end:
+                mv = hv + timedelta(seconds=random.uniform(8, 20))
+                if mv.hour != safe_periode:
+                    hv = h_start + timedelta(seconds=random.uniform(10, 1800))
+                    mv = hv + timedelta(seconds=gap_pair)
+        # register
+        _FOTO_TIMELINE.setdefault(key, []).extend([hv, mv])
+        return _format_utc(hv), _format_utc(mv)
+
+    # ada existing -> pakai logic mundur: MV_next = oldest - gap_inter, HV_next = MV_next - gap_pair
+    oldest = min(existing)
+    attempts = 0
+    while attempts < 60:
+        gap_inter = random.uniform(10.0, 20.0) + random.uniform(0, 0.9)
+        gap_pair = random.randint(12, 42)
+
+        # compress jika window hampir habis
+        available = (oldest - hard_start).total_seconds()
+        if available < (gap_inter + gap_pair + 5):
+            gap_inter = random.uniform(5.0, 9.5)
+            gap_pair = random.randint(8, 20)
+
+        mv = oldest - timedelta(seconds=gap_inter, milliseconds=random.randint(50, 900))
+        hv = mv - timedelta(seconds=gap_pair, milliseconds=random.randint(80, 850))
+
+        if hv < hard_start:
+            # cari slot kosong
+            free_mv = _find_free_slot(hard_start, hard_end, existing, min_gap=10.0)
+            if free_mv:
+                # HV = free_mv - gap_pair, MV = free_mv
+                hv_try = free_mv - timedelta(seconds=gap_pair, milliseconds=random.randint(80, 850))
+                if hv_try >= hard_start and all(abs((hv_try - e).total_seconds()) >= 8 for e in existing) and all(abs((free_mv - e).total_seconds()) >= 8 for e in existing):
+                    _FOTO_TIMELINE[key].extend([hv_try, free_mv])
+                    return _format_utc(hv_try), _format_utc(free_mv)
+            attempts += 1
+            continue
+
+        # cek gap minimal
+        def _ok_gap(ts, ex_list, gap):
+            return all(abs((ts - e).total_seconds()) >= gap for e in ex_list)
+
+        if _ok_gap(mv, existing, 8) and _ok_gap(hv, existing, 8):
+            # ideal min 10s, tapi 8s ok untuk crowded hour
+            if len(existing) < 15:
+                if not (_ok_gap(mv, existing, 10) and _ok_gap(hv, existing, 10)):
+                    if attempts < 30:
+                        attempts += 1
+                        continue
+            _FOTO_TIMELINE[key].extend([hv, mv])
+            return _format_utc(hv), _format_utc(mv)
+
+        attempts += 1
+
+    # fallback: paksa
+    mv = oldest - timedelta(seconds=random.uniform(10, 20))
+    hv = mv - timedelta(seconds=random.randint(12, 42))
+    if hv < hard_start:
+        hv = hard_start + timedelta(seconds=random.uniform(5, 30))
+        mv = hv + timedelta(seconds=random.randint(12, 25))
+    _FOTO_TIMELINE[key].extend([hv, mv])
+    return _format_utc(hv), _format_utc(mv)
 
 
 def rand_foto_pair_dicts(date_str: str, periode: int, durasi_min: float = None):

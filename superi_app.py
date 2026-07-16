@@ -1609,12 +1609,19 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
         
         if not confirm(f"\n  Isi {len(valid_periods)} periode tegangan {item['nama']}?"):
             return
-        
+
+        # batch per-item (beda jam, 1 item) -> reset tiap jam agar tetap spacing 10-20s jika di-run secepatnya per jam
+        # tapi untuk beda periode, gap antar jam tidak krusial, jadi cukup reset per periode
         dt = datetime.strptime(date_str, "%Y-%m-%d")
         success = 0
         fail = 0
         total = len(valid_periods)
         for i, per in enumerate(valid_periods, 1):
+            if hu and hasattr(hu, "reset_foto_sequence"):
+                try:
+                    hu.reset_foto_sequence(date_str, per)
+                except Exception:
+                    pass
             mv, hv, _ = teg_suggestions[per]
             durasi = _human_durasi(data_type)
             fotoHV, fotoMV = _human_foto_pair_dicts(date_str, per, durasi)
@@ -1681,6 +1688,12 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
     fail = 0
     total = len(empty_periods)
     for i, per in enumerate(empty_periods, 1):
+        # Untuk batch per-item (beda jam), reset tracker per periode agar spacing historis tetap terjaga
+        if hu and hasattr(hu, "reset_foto_sequence"):
+            try:
+                hu.reset_foto_sequence(date_str, per)
+            except Exception:
+                pass
         durasi = _human_durasi(data_type)
         data_dict = {
             ep["id_field"]: item["id"],
@@ -1876,6 +1889,13 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
         input(f"  {C['D']}[Enter]{C['R']}")
         return
     
+    # Reset tracker foto agar gap 10-20s antar item dalam periode yang sama berlaku
+    if hu and hasattr(hu, "reset_foto_sequence"):
+        try:
+            hu.reset_foto_sequence(date_str, per)
+        except Exception:
+            pass
+
     # Submit semua (live progress)
     dt = datetime.strptime(date_str, "%Y-%m-%d")
     success = 0

@@ -320,6 +320,12 @@ def auto_input_trafo_from_penyulang(token, gi_id, date_str, periode, dry_run=Fal
     if not targets:
         log(f"  Beban Trafo P{periode:02d}: semua sudah terisi, skip")
         return {"success": 0, "fail": 0, "skipped": len(trafos), "anomaly": 0, "items": []}
+    # Reset foto timeline biar spacing 10-20s antar item dalam periode yang sama
+    if hu and hasattr(hu, "reset_foto_sequence"):
+        try:
+            hu.reset_foto_sequence(date_str, periode)
+        except Exception:
+            pass
     dt = datetime.strptime(date_str, "%Y-%m-%d")
     item_logs = []
     success = 0
@@ -408,6 +414,13 @@ def auto_input_jam(token, data_type, gi_id, date_str, periode, dry_run=False, ma
     if not targets:
         log(f"  {ep['label']} P{periode:02d}: semua sudah terisi, skip")
         return {"success": 0, "fail": 0, "skipped": len(items), "anomaly": 0, "items": []}
+
+    # Reset foto timeline untuk gap 10-20s antar item di periode yang sama
+    if hu and hasattr(hu, "reset_foto_sequence"):
+        try:
+            hu.reset_foto_sequence(date_str, periode)
+        except Exception:
+            pass
     
     # Fetch cache histori (sekali untuk semua target)
     cache = a.fetch_history_bulk(token, data_type, gi_id, date_str)
