@@ -425,60 +425,19 @@ def _infer_data_type_from_path_web(path: str) -> str:
     return "beban-penyulang"
 
 
-def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photos):
-    """POST multipart request with humanized filename/boundary/UA and varying JPEG bytes."""
-    try:
-        url = f"{API_BASE}{path}"
-        inner = json.dumps(data_dict)
-        bd = _h_boundary()
-        foto_ts = data_dict.get("foto", {}).get("date") or data_dict.get("fotoHV", {}).get("date")
-        data_type_hint = _infer_data_type_from_path_web(path)
-
-        if hu:
-            if num_photos > 1:
-                jb1, jb2 = hu.rand_jpeg_pair()
-                jpeg_pool = [jb1, jb2]
-            else:
-                jpeg_pool = [hu.rand_jpeg_bytes()]
-        else:
-            jpeg_pool = [file_bytes]
-
-        body_parts = [f'--{bd}\r\nContent-Disposition: form-data; name="data"\r\n\r\n{inner}\r\n'.encode()]
-        for i in range(num_photos):
-            if i == 1 and data_dict.get("fotoMV", {}).get("date"):
-                fn_ts = data_dict["fotoMV"]["date"]
-                subtype = "MV"
-            elif i == 0 and data_dict.get("fotoHV", {}).get("date"):
-                fn_ts = data_dict["fotoHV"]["date"]
-                subtype = "HV"
-            else:
-                fn_ts = foto_ts
-                subtype = None
-            fname = _h_filename(fn_ts, idx=i, data_type=data_type_hint, subtype=subtype)
-            fbytes = jpeg_pool[i % len(jpeg_pool)] if hu else file_bytes
-            body_parts.append(f'--{bd}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fname}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
-            body_parts.append(fbytes if isinstance(fbytes, bytes) else file_bytes)
-            body_parts.append(b'\r\n')
-        body_parts.append(f'--{bd}--\r\n'.encode())
-        body = b''.join(body_parts)
-
-        req = urllib.request.Request(url, data=body,
-            headers={
-                "Content-Type": f"multipart/form-data; boundary={bd}",
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json",
-                "User-Agent": _h_user_agent(),
-            },
-            method="POST")
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return resp.status, json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        try:
-            return e.code, json.loads(e.read())
-        except Exception:
-            return e.code, {"message": str(e)}
-    except Exception as e:
-        return 500, {"error": str(e)}
+def api_post_multipart(
+    token, path, data_dict, file_bytes, file_field, num_photos, item_name=None
+):
+    """Gunakan uploader inti agar format dan verifikasi foto konsisten di CLI/Web/Auto."""
+    return _cli.api_post_multipart(
+        token,
+        path,
+        data_dict,
+        file_bytes,
+        file_field,
+        num_photos,
+        item_name=item_name,
+    )
 
 def api_delete(token, path):
     """DELETE request."""

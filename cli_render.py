@@ -304,3 +304,50 @@ def render_sync_summary(label, ok_count, fail_count, skip_count, total):
         f"  ┃{inner}┃",
         f"  ┗{'━' * w}┛",
     ]
+
+
+def render_settings_box(photo_source, history_days, pool_count, manual_stats, total_manual):
+    """Box untuk settings foto source: manual (per-item) vs pool (1 foto semua)."""
+    src_label = "MANUAL (per-item sesuai)" if photo_source == "manual" else "POOL (1 foto untuk semua)"
+    lines = []
+    lines.append(f"  Foto Source : {photo_source.upper()} - {src_label}")
+    lines.append(f"  History     : {history_days} hari")
+    lines.append(f"  Pool generic: {pool_count} file di photo/pool/")
+    if manual_stats:
+        bp = manual_stats.get("beban-penyulang", {})
+        bt = manual_stats.get("beban-trafo", {})
+        tt = manual_stats.get("tegangan-trafo", {})
+        lines.append(f"  Manual penyulang: {bp.get('folders',0)} folder / {bp.get('files',0)} foto (25 ON + 7 OFF tetap)")
+        lines.append(f"  Manual beban    : {bt.get('folders',0)} folder / {bt.get('files',0)} foto")
+        lines.append(f"  Manual tegangan : {tt.get('folders',0)} trafo / HV {tt.get('hv',0)} + MV {tt.get('mv',0)} = {tt.get('total',0)} foto (hv/mv terpisah)")
+        lines.append(f"  Total manual    : {total_manual} foto")
+    lines.append(f"  Filename    : fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg (humanizer tetap, bukan basename manual)")
+    lines.append(f"  OFF         : 7 penyulang CB OFF tetap simpan tapi skip input")
+    lines.append(f"  Varian      : asli 40%, blur_ringan 20%, blur_berat 10%, kabur_glare 15%, noisy_gelap 15%")
+    return lines
+
+
+def render_pool_status(detailed_rows):
+    """Render per-item pool status: list of (nama, count, on/off, type_label)."""
+    lines = []
+    lines.append(f"  {'Nama':<22} {'Count':<6} {'CB':<4} {'Type'}")
+    lines.append("  " + "─" * 50)
+    for nama, cnt, cb, typ in detailed_rows:
+        lines.append(f"  {str(nama)[:22]:<22} {cnt:<6} {cb:<4} {typ}")
+    return lines
+
+
+def render_suggest_table_with_pool(rows):
+    """Like render_suggest_table but rows = (no, nama, value, pool_cnt, info)."""
+    lines = []
+    header = (f"  No  {_pad('Nama', _SUG_NAMA_W)}  "
+              f"{_pad('Suggest', 14)}  {_pad('Foto', 8)}  Info")
+    lines.append(header)
+    lines.append("  " + "─" * (3 + _SUG_NAMA_W + 14 + 8 + 3 * 4 + 6))
+    for no, nama, val, pool_cnt, info in rows:
+        pool_str = f"{pool_cnt} ref" if pool_cnt > 0 else "pool"
+        lines.append(
+            f"  {no:<2}  {_truncate(str(nama), _SUG_NAMA_W):<{_SUG_NAMA_W}}  "
+            f"{str(val)[:14]:<14}  {pool_str:<8}  {info}"
+        )
+    return lines

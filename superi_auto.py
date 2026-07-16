@@ -349,7 +349,7 @@ def auto_input_trafo_from_penyulang(token, gi_id, date_str, periode, dry_run=Fal
                 item_logs.append({"nama": trafo.get("nama", "?"), "value": value_log, "ok": True})
                 continue
             try:
-                _, resp = a.api_post_multipart(token, trafo_ep["input"], payload, _get_jpeg_single(), trafo_ep["file_field"], trafo_ep["num_photos"])
+                _, resp = a.api_post_multipart(token, trafo_ep["input"], payload, _get_jpeg_single(), trafo_ep["file_field"], trafo_ep["num_photos"], trafo.get("nama"))
                 if resp.get("success"):
                     log(f"  [OK] {trafo.get('nama', '?')} P{periode:02d}: {value_log}")
                 else:
@@ -524,10 +524,24 @@ def auto_input_jam(token, data_type, gi_id, date_str, periode, dry_run=False, ma
                 continue
 
             try:
-                status, resp = a.api_post_multipart(token, ep["input"], data_dict, _get_jpeg_single(), ep["file_field"], ep["num_photos"])
+                status, resp = a.api_post_multipart(token, ep["input"], data_dict, _get_jpeg_single(), ep["file_field"], ep["num_photos"], nama)
                 if resp.get("success"):
-                    log(f"  [OK] {nama} P{periode:02d}: {value_log}")
-                    item_logs.append({"nama": nama, "value": value_log, "ok": True})
+                    photo_check = resp.get("_photo_upload")
+                    if photo_check and not photo_check.get("ok"):
+                        error = photo_check.get("error", "foto gagal diproses server")
+                        # Hapus record yang foto gagal agar tidak jadi sampah MISSING uri (khusus tegangan)
+                        try:
+                            rec_id = (resp.get("data") or {}).get("id")
+                            if rec_id:
+                                a.api_delete(token, f"{ep['delete']}/{rec_id}")
+                                log(f"  [RETRY-FOTO] {nama} P{periode:02d}: {error} -> record dihapus, akan retry", "WARN")
+                        except Exception:
+                            pass
+                        attempt_fail += 1
+                        item_logs.append({"nama": nama, "value": value_log, "ok": False, "photo_ok": False, "err": error})
+                    else:
+                        log(f"  [OK] {nama} P{periode:02d}: {value_log}")
+                        item_logs.append({"nama": nama, "value": value_log, "ok": True, "photo_ok": True})
                 else:
                     msg = resp.get("message", "?")
                     log(f"  [FAIL] {nama} P{periode:02d}: {msg}", "ERROR")

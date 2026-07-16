@@ -17,6 +17,7 @@ import base64
 import subprocess
 import platform
 import random
+import time
 from datetime import datetime
 
 # ============================================================
@@ -96,15 +97,20 @@ def _human_shuffled(seq):
     return list(seq)
 
 
-def _get_jpeg_bytes(single=True):
+def _get_jpeg_bytes(single=True, item_name=None, data_type=None, subtype=None):
     """Return JPEG bytes humanized: random size 30-150KB, hash berbeda tiap call.
     single=True -> 1 foto, single=False -> (jpeg1, jpeg2) untuk tegangan.
+
+    - Jika photo_source=manual + item_name -> per-item sesuai input (random dari folder item + hv/mv terpisah)
+    - Jika photo_source=pool -> 1 foto untuk semua (generic)
+    - Filename upload tetap humanizer: fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg (bukan basename manual)
     """
+    source = get_photo_source()
     if hu:
         if single:
-            return hu.rand_jpeg_bytes()
+            return hu.rand_jpeg_bytes(item_name=item_name, data_type=data_type, subtype=subtype, photo_source=source)
         else:
-            return hu.rand_jpeg_pair()
+            return hu.rand_jpeg_pair(item_name=item_name, data_type=data_type, photo_source=source)
     return DUMMY_JPEG, DUMMY_JPEG
 
 
@@ -553,6 +559,37 @@ def get_history_days():
         return 7
     return val if val in _VALID_HISTORY_DAYS else 7
 
+
+# === FOTO SOURCE: manual (per-item sesuai) vs pool (1 foto untuk semua) ===
+_VALID_PHOTO_SOURCES = {"pool", "manual"}
+_DEFAULT_PHOTO_SOURCE = "pool"
+
+
+def get_photo_source():
+    """Baca photo_source dari config, validasi pool/manual, fallback pool."""
+    cfg = load_config()
+    # env override untuk testing
+    env_val = os.environ.get("SUPERI_PHOTO_SOURCE", "").strip().lower()
+    if env_val in _VALID_PHOTO_SOURCES:
+        return env_val
+    v = cfg.get("photo_source", _DEFAULT_PHOTO_SOURCE)
+    if not v:
+        return _DEFAULT_PHOTO_SOURCE
+    v = str(v).lower().strip()
+    return v if v in _VALID_PHOTO_SOURCES else _DEFAULT_PHOTO_SOURCE
+
+
+def set_photo_source(source: str):
+    """Set photo_source ke config, return True jika sukses."""
+    src = str(source).lower().strip()
+    if src not in _VALID_PHOTO_SOURCES:
+        return False
+    cfg = load_config()
+    cfg["photo_source"] = src
+    save_config(cfg)
+    return True
+
+
 def login(nip, password):
     """Login ke SUPER-I APP, dengan handling 401 yang jelas."""
     try:
@@ -601,7 +638,88 @@ def _infer_data_type_from_path(path: str) -> str:
     return "beban-penyulang"
 
 
-def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photos):
+def _verify_tegangan_photo_upload(token, data_dict, result):
+    """Verify that a successful voltage input stored both readable images."""
+    verification = {"ok": False, "error": "record tegangan tidak ditemukan"}
+    record_id = (result.get("data") or {}).get("id")
+    if not record_id:
+        return verification
+
+    try:
+        date_str = f"{int(data_dict['tahun']):04d}-{int(data_dict['bulan']) + 1:02d}-{int(data_dict['tanggal']):02d}"
+        gi_id = load_config().get("gi_id", "222")
+        record = None
+        for attempt in range(3):
+            listed = api_get(
+                token,
+                ENDPOINTS["tegangan-trafo"]["list"],
+                {"garduIndukId": gi_id, "date": date_str},
+            )
+            record = next(
+                (
+                    entry
+                    for item in listed.get("data", {}).get("items", [])
+                    for entry in item.get("tegangan", [])
+                    if entry.get("id") == record_id
+                ),
+                None,
+            )
+            if record:
+                break
+            if attempt < 2:
+                time.sleep(1)
+        if not record:
+            return verification
+
+        uris = {
+            "HV": (record.get("fotoHV") or {}).get("uri"),
+            "MV": (record.get("fotoMV") or {}).get("uri"),
+        }
+        missing = [name for name, uri in uris.items() if not uri]
+        if missing:
+            verification["error"] = f"URI foto {'/'.join(missing)} tidak dibuat server"
+            verification["uris"] = uris
+            return verification
+
+        sizes = {}
+        for name, uri in uris.items():
+            req = urllib.request.Request(
+                f"{BASE_URL}/api{uri}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                content = resp.read()
+            if not content.startswith(b"\xff\xd8") or len(content) < 1000:
+                verification["error"] = f"media foto {name} bukan JPEG valid"
+                verification["uris"] = uris
+                return verification
+            sizes[name] = len(content)
+
+        return {"ok": True, "uris": uris, "sizes": sizes}
+    except Exception as exc:
+        verification["error"] = f"verifikasi media gagal: {exc}"
+        return verification
+
+
+def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photos, item_name=None):
+    """
+    POST multipart dengan foto dari pool/manual per-item.
+
+    - Content bytes: dari photo/manual/{data_type}/{ITEM}/ random (jika manual mode + item_name)
+      atau dari photo/pool/ 1 foto untuk semua (jika pool mode)
+      + varian blur/kabur/asli/noisy_gelap random 40/20/10/15/15
+    - Filename upload beban memakai humanizer fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg.
+      Khusus tegangan, nama part transport wajib fotoHV.jpg dan fotoMV.jpg seperti APK GAMA;
+      server tetap menyimpannya dengan nama acak fotoHV/fotoMV_YYYY-MM-DD_<hex>.jpg.
+
+    OFF: sudah di-skip di batch_fill_periode (statusCB==OFF skip), foto OFF tetap disimpan tapi tidak dipakai input.
+    Foto tidak dihapus setelah dipakai (read-only random choice).
+    """
+    # Jangan mengubah payload milik caller saat membuang metadata internal.
+    data_dict = dict(data_dict)
+    # _item_name_hint adalah internal only, jangan ikut ke JSON payload (server reject 400 jika ada property unknown)
+    item_name = item_name or data_dict.pop("_item_name_hint", None)
+
     url = f"{API_BASE}{path}"
     inner = json.dumps(data_dict)
 
@@ -613,13 +731,30 @@ def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photo
         foto_ts_for_name = data_dict["fotoHV"]["date"]
 
     data_type_hint = _infer_data_type_from_path(path)
+    photo_source = get_photo_source()
 
+    # Content harus mirip aplikasi asli: 720x720 baseline, no EXIF, varian blur/kabur/asli.
     if hu:
         if num_photos > 1:
-            jb1, jb2 = hu.rand_jpeg_pair()
+            # Tegangan: HV dari .../hv/, MV dari .../mv/ terpisah (manual mode), distinct & size beda
+            jb1 = hu.rand_jpeg_bytes(item_name=item_name, data_type=data_type_hint, subtype="HV", photo_source=photo_source)
+            jb2 = hu.rand_jpeg_bytes(item_name=item_name, data_type=data_type_hint, subtype="MV", photo_source=photo_source)
+            # Pastikan SHA beda & size beda minimal 500 byte (2 foto berbeda seperti aplikasi asli)
+            try:
+                import hashlib
+                tries = 0
+                while (jb1 == jb2 or hashlib.sha256(jb1).hexdigest() == hashlib.sha256(jb2).hexdigest() or abs(len(jb1)-len(jb2)) < 500) and tries < 12:
+                    # Coba variant berbeda untuk MV
+                    jb2 = hu.rand_jpeg_bytes(item_name=item_name, data_type=data_type_hint, subtype="MV", photo_source=photo_source)
+                    tries += 1
+                # Jika masih sama, pakai pair yang sudah ensure distinct
+                if jb1 == jb2 or hashlib.sha256(jb1).hexdigest() == hashlib.sha256(jb2).hexdigest():
+                    jb1, jb2 = hu.rand_jpeg_pair(item_name=item_name, data_type=data_type_hint, photo_source=photo_source)
+            except:
+                pass
             jpeg_pool = [jb1, jb2]
         else:
-            jpeg_pool = [hu.rand_jpeg_bytes()]
+            jpeg_pool = [hu.rand_jpeg_bytes(item_name=item_name, data_type=data_type_hint, photo_source=photo_source)]
     else:
         jpeg_pool = [file_bytes]
 
@@ -652,6 +787,26 @@ def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photo
                 fname = f"fotoBebanPenyulang_{date_part}_{hex16}.jpg"
             fbytes = file_bytes if isinstance(file_bytes, bytes) else file_bytes
 
+        # Backend tegangan menentukan slot foto dari filename part seperti APK GAMA.
+        # Nama acak project tetap dipakai oleh server pada URI file yang tersimpan.
+        if data_type_hint == "tegangan-trafo" and num_photos > 1:
+            fname = "fotoMV.jpg" if i == 1 else "fotoHV.jpg"
+
+        # Pastikan filename HV & MV tidak sama untuk endpoint selain tegangan.
+        if data_type_hint != "tegangan-trafo" and num_photos > 1 and i == 1:
+            # Cek duplicate filename dengan part sebelumnya
+            prev_fname = ""
+            try:
+                # Cari filename sebelumnya di body_parts
+                for part in body_parts[::-1]:
+                    if b'filename="' in part:
+                        prev_fname = part.split(b'filename="')[1].split(b'"')[0].decode()
+                        break
+            except:
+                pass
+            if prev_fname and fname == prev_fname:
+                fname = fname.replace(".jpg", "_2.jpg")
+
         body_parts.append(f'--{bd}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fname}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
         body_parts.append(fbytes if isinstance(fbytes, bytes) else fbytes)
         body_parts.append(b'\r\n')
@@ -668,7 +823,11 @@ def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photo
     req = urllib.request.Request(url, data=body, headers=hdrs, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
-            return resp.status, json.loads(resp.read())
+            status = resp.status
+            result = json.loads(resp.read())
+        if result.get("success") and data_type_hint == "tegangan-trafo":
+            result["_photo_upload"] = _verify_tegangan_photo_upload(token, data_dict, result)
+        return status, result
     except urllib.error.HTTPError as e:
         try:
             return e.code, json.loads(e.read())
@@ -1359,10 +1518,16 @@ def input_single(token, data_type, gi_id, date_str, user_info):
         data_dict["foto"] = _human_foto_dict(date_str, per, durasi, data_type)
 
     print("\n  Mengirim...")
-    status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
+    # Foto: per-item sesuai jika manual mode, 1 foto semua jika pool mode, filename tetap humanizer
+    status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"], item_name=nama)
     
     if result.get("success"):
-        print(f"  {C['G']}✓ BERHASIL! ID: {result['data'].get('id')}{C['R']}")
+        photo_check = result.get("_photo_upload")
+        if photo_check and not photo_check.get("ok"):
+            print(f"  {C['Y']}⚠ NILAI TERSIMPAN! ID: {result['data'].get('id')}, tetapi foto gagal{C['R']}")
+            print(f"  {C['RE']}✗ {photo_check.get('error')}{C['R']}")
+        else:
+            print(f"  {C['G']}✓ BERHASIL! ID: {result['data'].get('id')}{C['R']}")
     else:
         msg = result.get("message", str(result))
         if isinstance(msg, list):
@@ -1639,9 +1804,34 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
                 "fotoHV": fotoHV,
                 "fotoMV": fotoMV,
             }
-            status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
+            # Foto: random dari manual (per-item) atau pool (1 foto semua) + varian blur/kabur/asli, filename tetap humanizer
+            status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"], item_name=item["nama"])
             ok = result.get("success")
-            detail = f"MV={mv} HV={hv}" if ok else str(result.get("message", "?"))[:30]
+            photo_check = result.get("_photo_upload")
+            # Log foto source untuk transparansi anti-robotik
+            foto_log = ""
+            try:
+                if hu and hasattr(hu, "get_last_meta"):
+                    meta = hu.get_last_meta()
+                    src_bn = meta.get("src_basename", "")[:32]
+                    var = meta.get("variant", "")
+                    src_mode = meta.get("source_mode", "")
+                    if src_bn:
+                        foto_log = f" | 📷 {src_bn} [{var}] ({src_mode})"
+            except:
+                pass
+            if ok and photo_check and not photo_check.get("ok"):
+                # Hapus record foto gagal agar tidak jadi sampah MISSING uri
+                try:
+                    rec_id = (result.get("data") or {}).get("id")
+                    if rec_id:
+                        api_delete(token, f"{ep['delete']}/{rec_id}")
+                except Exception:
+                    pass
+                detail = f"FOTO GAGAL: {photo_check.get('error', '?')} -> dihapus"
+                ok = False
+            else:
+                detail = f"MV={mv} HV={hv}{foto_log}" if ok else str(result.get("message", "?"))[:30]
             if ui:
                 sys.stdout.write("\r" + ui.fmt_progress_line(i, total, f"P{per:02d}", ok=ok, detail=detail))
                 sys.stdout.flush()
@@ -1707,9 +1897,20 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
             ep["value_field"]: value,
             "foto": _human_foto_dict(date_str, per, durasi, data_type),
         }
-        status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
+        status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"], item_name=item["nama"])
         ok = result.get("success")
-        detail = f"{value}A" if ok else str(result.get("message", "?"))[:30]
+        foto_log = ""
+        try:
+            if hu and hasattr(hu, "get_last_meta"):
+                meta = hu.get_last_meta()
+                src_bn = meta.get("src_basename", "")[:32]
+                var = meta.get("variant", "")
+                src_mode = meta.get("source_mode", "")
+                if src_bn:
+                    foto_log = f" | 📷 {src_bn} [{var}] ({src_mode})"
+        except:
+            pass
+        detail = f"{value}A{foto_log}" if ok else str(result.get("message", "?"))[:30]
         if ui:
             sys.stdout.write("\r" + ui.fmt_progress_line(i, total, f"P{per:02d}", ok=ok, detail=detail))
             sys.stdout.flush()
@@ -1932,12 +2133,40 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
             detail = f"{value}A"
 
         try:
-            status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"])
+            # Foto: random per-item manual (sesuai) atau pool (1 foto semua) + varian blur/kabur/asli
+            # Filename tetap humanizer: fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg
+            # OFF sudah skip di empty_by_periode, foto tidak dihapus setelah dipakai (read-only)
+            status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"], item_name=it["nama"])
             ok = result.get("success")
+            photo_check = result.get("_photo_upload")
             if not ok:
                 reason = str(result.get("message", "error"))[:30]
                 failures.append((it["nama"], reason))
                 detail = reason
+            else:
+                # Untuk tegangan: foto harus ada uri, jika tidak -> treat as gagal + hapus record agar bisa retry
+                if photo_check and not photo_check.get("ok"):
+                    # Hapus record yang foto gagal agar tidak jadi sampah MISSING uri
+                    try:
+                        rec_id = (result.get("data") or {}).get("id")
+                        if rec_id:
+                            api_delete(token, f"{ep['delete']}/{rec_id}")
+                    except Exception:
+                        pass
+                    failures.append((it["nama"], f"nilai tersimpan tapi FOTO GAGAL: {photo_check.get('error', 'foto gagal')}"))
+                    detail = "FOTO GAGAL -> dihapus, akan retry"
+                    ok = False  # anggap gagal agar retry / tidak dihitung success
+                else:
+                    # Tambah info foto source untuk transparansi (manual vs pool + varian + basename)
+                    try:
+                        if hu and hasattr(hu, "get_last_meta"):
+                            meta = hu.get_last_meta()
+                            src_bn = meta.get("src_basename", "")[:24]
+                            var = meta.get("variant", "")
+                            if src_bn:
+                                detail = f"{detail} | 📷 {src_bn} [{var}]"
+                    except:
+                        pass
         except Exception as e:
             ok = False
             failures.append((it["nama"], str(e)[:30]))
@@ -2530,6 +2759,318 @@ def auto_mode_menu():
             print(f"\n  {C['RE']}✗ Pilihan tidak valid{C['R']}")
             input(f"  {C['D']}[Enter]{C['R']}")
 
+def photo_settings_menu():
+    """Menu pengaturan foto source: manual (per-item sesuai) vs pool (1 foto untuk semua).
+
+    - Manual: content dari photo/manual/{tipe}/{ITEM}/ (random per item + hv/mv terpisah) + varian blur/kabur/asli
+    - Pool: content dari photo/pool/ 1 foto untuk semua input (fallback generic)
+    - Filename upload TETAP humanizer: fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg (bukan basename manual)
+    - Foto tidak dihapus setelah dipakai (read-only random choice)
+    - OFF tetap simpan 84 foto tapi skip input saat CB OFF
+    """
+    while True:
+        clear()
+        header("⚙ PENGATURAN FOTO & POOL")
+        cfg = load_config()
+        photo_src = get_photo_source()
+        hist_days = get_history_days()
+
+        # pool stats
+        pool_stats = {"pool": 0, "total_manual": 0, "manual": {"beban-penyulang": {"folders":0,"files":0},"beban-trafo":{"folders":0,"files":0},"tegangan-trafo":{"folders":0,"hv":0,"mv":0,"total":0}}}
+        try:
+            if hu and hasattr(hu, "get_pool_stats"):
+                pool_stats = hu.get_pool_stats()
+        except Exception:
+            pass
+
+        manual_bp = pool_stats.get("manual", {}).get("beban-penyulang", {})
+        manual_bt = pool_stats.get("manual", {}).get("beban-trafo", {})
+        manual_tt = pool_stats.get("manual", {}).get("tegangan-trafo", {})
+        total_manual = pool_stats.get("total_manual", 0)
+        pool_cnt = pool_stats.get("pool", 0)
+
+        # Badge source
+        if photo_src == "manual":
+            src_badge = f"{C['G']}MANUAL{C['R']} (per-item sesuai input)"
+            src_desc = "Foto per penyulang/trafo: random dari folder item + hv/mv terpisah + varian blur/kabur/asli"
+        else:
+            src_badge = f"{C['Y']}POOL{C['R']} (1 foto untuk semua)"
+            src_desc = "1 foto generic di photo/pool/ dipakai untuk semua item, re-encode beda SHA tiap upload"
+
+        print(f"  {C['D']}┌─ Sumber Foto ─────────────────────────────────────┐{C['R']}")
+        print(f"  {C['D']}│{C['R']}  Saat ini : {src_badge}")
+        print(f"  {C['D']}│{C['R']}  {C['D']}{src_desc}{C['R']}")
+        print(f"  {C['D']}│{C['R']}  Filename : {C['C']}fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg{C['R']} ({C['D']}humanizer tetap, bukan basename manual{C['R']})")
+        print(f"  {C['D']}│{C['R']}  OFF      : 7 penyulang CB OFF tetap simpan 84 foto tapi skip input (read-only, tidak dihapus)")
+        print(f"  {C['D']}└─────────────────────────────────────────────────┘{C['R']}")
+        print()
+        print(f"  {C['D']}┌─ Statistik Pool ──────────────────────────────────┐{C['R']}")
+        print(f"  {C['D']}│{C['R']}  Pool generic    : {C['G']}{pool_cnt}{C['R']} file di {C['D']}photo/pool/{C['R']}")
+        print(f"  {C['D']}│{C['R']}  Manual penyulang: {C['G']}{manual_bp.get('folders',0)}{C['R']} folder / {C['G']}{manual_bp.get('files',0)}{C['R']} foto (25 ON + 7 OFF tetap)")
+        print(f"  {C['D']}│{C['R']}  Manual beban    : {C['G']}{manual_bt.get('folders',0)}{C['R']} folder / {C['G']}{manual_bt.get('files',0)}{C['R']} foto (TRAFO_1/2/3)")
+        print(f"  {C['D']}│{C['R']}  Manual tegangan : {C['G']}{manual_tt.get('folders',0)}{C['R']} trafo / HV {C['G']}{manual_tt.get('hv',0)}{C['R']} + MV {C['G']}{manual_tt.get('mv',0)}{C['R']} = {C['G']}{manual_tt.get('total',0)}{C['R']} foto")
+        print(f"  {C['D']}│{C['R']}  Total manual    : {C['G']}{total_manual}{C['R']} foto")
+        print(f"  {C['D']}│{C['R']}  History         : {C['G']}{hist_days}{C['R']} hari")
+        print(f"  {C['D']}└─────────────────────────────────────────────────┘{C['R']}")
+        print()
+        print(f"  {C['M']}{C['B']}AKSI{C['R']}")
+        print(f"  {C['C']}[1]{C['R']} Ganti Sumber Foto (pool ↔ manual)")
+        print(f"  {C['C']}[2]{C['R']} Ganti History Days (3/7/14)")
+        print(f"  {C['C']}[3]{C['R']} Lihat Detail Pool per Item")
+        print(f"  {C['C']}[4]{C['R']} Validasi Foto Manual (scan 500+ file)")
+        print()
+        print(f"  {C['M']}{C['B']}INFO{C['R']}")
+        print(f"  {C['C']}[5]{C['R']} Panduan: Cara foto manual anti-robotik")
+        print(f"  {C['C']}[6]{C['R']} Test Foto Random (lihat varian blur/kabur/asli)")
+        print()
+        print(f"  {C['RE']}[0]{C['R']} Kembali ke menu utama")
+        print()
+        print(f"  {C['D']}{'─' * 56}{C['R']}")
+
+        choice = input(f"  {C['B']}Pilih ▸ {C['R']}").strip().lower()
+
+        if choice == '0':
+            return
+        elif choice == '1':
+            print()
+            print(f"  {C['B']}Pilih sumber foto:{C['R']}")
+            print(f"  {C['C']}pool{C['R']}   = 1 foto generic di photo/pool/ untuk semua input (fallback cepat)")
+            print(f"  {C['C']}manual{C['R']} = per-item sesuai input (random dari folder item + hv/mv terpisah + varian blur/kabur/asli)")
+            print(f"  {C['D']}Filename upload tetap humanizer: fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg (bukan basename manual){C['R']}")
+            print(f"  {C['D']}Foto tidak dihapus setelah dipakai (read-only random choice){C['R']}")
+            print(f"  {C['D']}OFF tetap simpan tapi skip input saat CB OFF{C['R']}")
+            print(f"  Saat ini: {photo_src}")
+            new_src = input(f"  Sumber baru (pool/manual) [batal]: ").strip().lower()
+            if new_src in ("pool", "manual"):
+                if set_photo_source(new_src):
+                    print(f"\n  {C['G']}✓ Foto source diubah ke {new_src.upper()}{C['R']}")
+                    if new_src == "manual":
+                        print(f"  {C['D']}  → Per-item: random dari photo/manual/{{tipe}}/{{ITEM}}/ + hv/mv terpisah{C['R']}")
+                        print(f"  {C['D']}  → Varian: asli 40%, blur_ringan 20%, blur_berat 10%, kabur_glare 15%, noisy_gelap 15%{C['R']}")
+                        print(f"  {C['D']}  → OFF 7 penyulang tetap ada tapi skip input CB OFF{C['R']}")
+                    else:
+                        print(f"  {C['D']}  → 1 foto generic di photo/pool/ untuk semua input{C['R']}")
+                        print(f"  {C['D']}  → Re-encode 720x720 crop ±5% + pixel jitter + quality 82-93 beda SHA tiap upload{C['R']}")
+                else:
+                    print(f"  {C['RE']}✗ Gagal ubah source{C['R']}")
+            else:
+                print(f"  {C['Y']}⊘ Dibatalkan{C['R']}")
+            input(f"  {C['D']}[Enter]{C['R']}")
+        elif choice == '2':
+            print()
+            print(f"  {C['D']}History days = berapa hari ke belakang untuk smart suggest{R['C']}")
+            print(f"  Valid: 3, 7, 14 (default 7)")
+            print(f"  Saat ini: {hist_days}")
+            new_hist = input(f"  History baru (3/7/14) [batal]: ").strip()
+            if new_hist in ("3", "7", "14"):
+                cfg["history_days"] = int(new_hist)
+                save_config(cfg)
+                print(f"  {C['G']}✓ History days diubah ke {new_hist}{C['R']}")
+            else:
+                if new_hist:
+                    print(f"  {C['RE']}✗ Invalid, harus 3/7/14{C['R']}")
+                else:
+                    print(f"  {C['Y']}⊘ Dibatalkan{C['R']}")
+            input(f"  {C['D']}[Enter]{C['R']}")
+        elif choice == '3':
+            # Detail pool per item
+            clear()
+            header("📁 DETAIL POOL PER ITEM")
+            try:
+                base_manual = os.path.join(SCRIPT_DIR, "photo", "manual")
+                if not os.path.isdir(base_manual):
+                    print(f"  {C['RE']}Folder photo/manual/ tidak ada{C['R']}")
+                else:
+                    # beban-penyulang
+                    print(f"\n  {C['M']}{C['B']}BEBAN PENYULANG (32 = 25 ON + 7 OFF){C['R']}")
+                    bp_path = os.path.join(base_manual, "beban-penyulang")
+                    if os.path.isdir(bp_path):
+                        # load mapping untuk CB info
+                        off_names = set()
+                        try:
+                            import json
+                            mapping_path = os.path.join(base_manual, "NAMA_MAPPING.json")
+                            if os.path.isfile(mapping_path):
+                                with open(mapping_path, 'r') as f:
+                                    mp = json.load(f)
+                                for k,v in mp.get("beban-penyulang", {}).items():
+                                    if v.get("cb")=="OFF":
+                                        off_names.add(k)
+                        except:
+                            pass
+                        for folder in sorted(os.listdir(bp_path)):
+                            full = os.path.join(bp_path, folder)
+                            if not os.path.isdir(full):
+                                continue
+                            cnt = 0
+                            try:
+                                cnt = len([f for f in os.listdir(full) if f.lower().endswith(('.jpg','.jpeg','.png'))])
+                            except:
+                                pass
+                            is_off = folder in off_names
+                            badge = f"{C['Y']}OFF{C['R']}" if is_off else f"{C['G']}ON{C['R']}"
+                            print(f"    {folder:<22} : {cnt:>3} foto [{badge}] {'(skip CB OFF, tetap simpan)' if is_off else ''}")
+                    # beban-trafo
+                    print(f"\n  {C['M']}{C['B']}BEBAN TRAFO (3){C['R']}")
+                    bt_path = os.path.join(base_manual, "beban-trafo")
+                    if os.path.isdir(bt_path):
+                        for folder in sorted(os.listdir(bt_path)):
+                            full = os.path.join(bt_path, folder)
+                            if not os.path.isdir(full):
+                                continue
+                            cnt = len([f for f in os.listdir(full) if f.lower().endswith(('.jpg','.jpeg','.png'))]) if os.path.isdir(full) else 0
+                            print(f"    {folder:<22} : {cnt:>3} foto")
+
+                    # tegangan
+                    print(f"\n  {C['M']}{C['B']}TEGANGAN TRAFO (5 trafo × hv/mv terpisah){C['R']}")
+                    tt_path = os.path.join(base_manual, "tegangan-trafo")
+                    if os.path.isdir(tt_path):
+                        for trafo in sorted(os.listdir(tt_path)):
+                            trafo_full = os.path.join(tt_path, trafo)
+                            if not os.path.isdir(trafo_full):
+                                continue
+                            hv_path = os.path.join(trafo_full, "hv")
+                            mv_path = os.path.join(trafo_full, "mv")
+                            cnt_hv = len([f for f in os.listdir(hv_path) if f.lower().endswith(('.jpg','.jpeg','.png'))]) if os.path.isdir(hv_path) else 0
+                            cnt_mv = len([f for f in os.listdir(mv_path) if f.lower().endswith(('.jpg','.jpeg','.png'))]) if os.path.isdir(mv_path) else 0
+                            print(f"    {trafo:<12} : HV {cnt_hv:>2} foto  MV {cnt_mv:>2} foto  (pisah folder, tidak perlu rename)")
+
+                    print(f"\n  {C['D']}Total manual: {total_manual} foto, pool generic: {pool_cnt} file{C['R']}")
+                    print(f"  {C['D']}Foto tidak dihapus setelah dipakai (read-only random){C['R']}")
+            except Exception as e:
+                print(f"  {C['RE']}Error: {e}{C['R']}")
+            input(f"\n  {C['D']}[Enter]{C['R']}")
+        elif choice == '4':
+            # Validasi foto manual
+            print()
+            print(f"  {C['Y']}Menjalankan validasi foto manual (scan 500+ file)...{C['R']}")
+            try:
+                import subprocess
+                import sys
+                script = os.path.join(SCRIPT_DIR, "tools", "validate_manual_pool.py")
+                if os.path.isfile(script):
+                    result = subprocess.run([sys.executable, script], cwd=SCRIPT_DIR)
+                else:
+                    print(f"  {C['RE']}tools/validate_manual_pool.py belum ada, jalankan manual:{C['R']}")
+                    print(f"  {C['D']}python3 -c \"import superi_humanizer as hu; print(hu.get_pool_stats())\"{C['R']}")
+                    # fallback simple stats
+                    if hu and hasattr(hu, "get_pool_stats"):
+                        print(f"  {hu.get_pool_stats()}")
+            except Exception as e:
+                print(f"  {C['RE']}Validasi error: {e}{C['R']}")
+            input(f"  {C['D']}[Enter]{C['R']}")
+        elif choice == '5':
+            clear()
+            header("📖 PANDUAN FOTO MANUAL ANTI-ROBOTIK")
+            print(f"""
+  {C['B']}Kenapa per-item?{C['R']}
+  - Kalau pakai 1 foto untuk semua (pool mode), visual sama semua → mudah terdeteksi robotik
+  - Per-item manual: CASABLANCA4 beda dengan LABORATORIUM, sesuai panel fisik asli
+
+  {C['B']}Foto diambil bagaimana?{C['R']}
+  - Per penyulang 2-3 foto: close-up (30-50cm), wide (1m), 45° sudut
+  - Per beban trafo 2 foto: full panel + close meter
+  - Per tegangan trafo: HV dan MV pisah folder (hv/ & mv/), tiap sisi 2 foto
+  - HP mode biasa, jangan portrait blur bawaan, size >100KB ideal
+  - Taruh di: photo/manual/{{tipe}}/{{NAMA}}/ (auto random per input)
+
+  {C['B']}Varian blur/kabur/asli?{C['R']}
+  - Saat input CLI, dari folder item tersebut di-random 1 foto
+  - Lalu di-apply varian random: asli 40%, blur ringan 20%, blur berat 10%,
+    kabur glare 15% (pantulan lampu), noisy gelap 15% (cocok jam 00-06)
+  - Crop center square 720x720 jitter ±5% + pixel jitter 2-6 titik
+  - Re-encode baseline JPEG quality 82-93, exif=b'', progressive=False
+  - Size 20-60KB (match audit server 14-51KB avg 27KB)
+  - Filename upload TETAP humanizer: fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg
+    (bukan basename manual seperti WhatsApp Image...)
+
+  {C['B']}OFF handling:{C['R']}
+  - 7 penyulang CB OFF (FISIOTERAPI, RONTGEN, REFLEXY, HERBAL, PINSET, KOPEL_*)
+    foto tetap simpan 84 file, tapi skip input saat CB OFF (read-only)
+
+  {C['B']}Foto dihapus setelah dipakai?{C['R']}
+  - TIDAK. File asli tetap di disk, hanya dibaca random tiap input
+  - Bisa dipakai lagi periode berikutnya, SHA beda karena varian+crop
+
+  {C['B']}Pool vs Manual:{C['R']}
+  - pool  : 1 foto di photo/pool/ untuk semua (fallback cepat, untuk demo)
+           re-encode beda SHA tiap upload tapi visual sama
+  - manual: per-item sesuai (random dari folder item + hv/mv terpisah)
+           visual beda per penyulang, lebih natural, rekomendasi utama
+
+  {C['B']}Setting:{C['R']}
+  - CLI: [T] Settings → [1] Ganti Sumber Foto (pool/manual)
+  - Config: .superi_config.json key photo_source
+  - Default: pool (backward compat)
+""")
+            input(f"  {C['D']}[Enter]{C['R']}")
+        elif choice == '6':
+            # Test foto random
+            clear()
+            header("🧪 TEST FOTO RANDOM + VARIAN")
+            try:
+                if not hu:
+                    print(f"  {C['RE']}Humanizer tidak tersedia (PIL mungkin belum install){C['R']}")
+                    input(f"  {C['D']}[Enter]{C['R']}")
+                    continue
+
+                print(f"  Test random pick dari pool (source={photo_src}):\n")
+                # test beban-penyulang
+                test_items = ["CASABLANCA4", "LABORATORIUM", "TRAFO 1"]
+                for item_name in test_items:
+                    data_type = "beban-penyulang" if "CASABLANCA" in item_name or item_name in ["LABORATORIUM"] else "beban-trafo"
+                    if item_name.startswith("TRAFO"):
+                        data_type = "beban-trafo"
+                    cnt = 0
+                    try:
+                        cnt = hu.get_manual_count(item_name, data_type)
+                    except:
+                        cnt = 0
+                    print(f"  {C['B']}{item_name}{C['R']} ({data_type}) - pool: {cnt} foto")
+                    for i in range(3):
+                        try:
+                            b = hu.rand_jpeg_bytes(item_name=item_name, data_type=data_type, photo_source=photo_src)
+                            meta = hu.get_last_meta()
+                            src_bn = meta.get("src_basename","")[:28]
+                            var = meta.get("variant","")
+                            smode = meta.get("source_mode","")
+                            print(f"    [{i+1}] {len(b)}B src={src_bn} [{var}] ({smode})")
+                        except Exception as e:
+                            print(f"    [{i+1}] Error: {e}")
+
+                # test tegangan hv/mv terpisah
+                print(f"\n  {C['B']}Tegangan TRAFO 1 HV/MV terpisah:{C['R']}")
+                for sub in ["HV","MV"]:
+                    try:
+                        b = hu.rand_jpeg_bytes(item_name="TRAFO 1", data_type="tegangan-trafo", subtype=sub, photo_source=photo_src)
+                        meta = hu.get_last_meta()
+                        src_bn = meta.get("src_basename","")[:28]
+                        var = meta.get("variant","")
+                        folder = meta.get("folder_label","")
+                        print(f"    {sub}: {len(b)}B src={src_bn} [{var}] folder={folder}")
+                    except Exception as e:
+                        print(f"    {sub} Error: {e}")
+
+                print(f"\n  {C['D']}Filename upload tetap humanizer (bukan basename manual):{C['R']}")
+                if hasattr(hu, "rand_filename"):
+                    from datetime import timezone, timedelta
+                    import datetime as _dt
+                    sample_dt = _dt.datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%dT%H:%M:%S.123Z")
+                    for dtype in ["beban-penyulang","beban-trafo","tegangan-trafo"]:
+                        fn = hu.rand_filename(sample_dt, idx=0, data_type=dtype, subtype="HV" if "tegangan" in dtype else None)
+                        print(f"    {dtype}: {fn}")
+
+                print(f"\n  {C['G']}Test selesai. Foto tidak dihapus, tetap di disk (read-only random).{C['R']}")
+            except Exception as e:
+                print(f"  {C['RE']}Error test: {e}{C['R']}")
+                import traceback
+                traceback.print_exc()
+            input(f"  {C['D']}[Enter]{C['R']}")
+        else:
+            print(f"\n  {C['RE']}✗ Pilihan tidak valid{C['R']}")
+            input(f"  {C['D']}[Enter]{C['R']}")
+
+
 def main():
     # CLI flag: superi_app.py --logout [opts]
     if any(a in sys.argv for a in ("--logout", "--lo")):
@@ -2584,8 +3125,11 @@ def main():
         print()
 
         # Lain
+        _photo_src = get_photo_source()
+        _photo_badge = f"{C['G']}{_photo_src.upper()}{C['R']}" if _photo_src=="manual" else f"{C['Y']}{_photo_src.upper()}{C['R']}"
         print(f"  {C['D']}{C['B']}PENGATURAN{C['R']}")
         print(f"  {C['C']}[G]{C['R']} Ganti Tanggal   {C['C']}[L]{C['R']} Login Ulang   {C['C']}[O]{C['R']} Logout   {C['C']}[S]{C['R']} Setup   {C['RE']}[0]{C['R']} Keluar")
+        print(f"  {C['C']}[T]{C['R']} 📸 Foto Source [{_photo_badge}]  {C['D']}({ 'per-item sesuai' if _photo_src=='manual' else '1 foto semua' }, varian blur/kabur/asli){C['R']}")
         print()
         # Auto mode status
         _auto_cfg = load_config()
@@ -2643,6 +3187,9 @@ def main():
                 batch_fill_periode(token, "beban-trafo", gi_id, date_str, user)
             elif choice == 'c':
                 batch_fill_periode(token, "tegangan-trafo", gi_id, date_str, user)
+            elif choice == 't':
+                photo_settings_menu()
+                config = load_config()
             elif choice == 'd':
                 auto_mode_menu()
                 config = load_config()

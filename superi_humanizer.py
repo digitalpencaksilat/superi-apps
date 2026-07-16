@@ -41,10 +41,25 @@ _FORBIDDEN_DURASI = {0.0}
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PHOTO_POOL_DIR = os.path.join(_SCRIPT_DIR, "photo", "pool")
+_MANUAL_POOL_BASE = os.path.join(_SCRIPT_DIR, "photo", "manual")
+_NAMA_MAPPING_PATH = os.path.join(_MANUAL_POOL_BASE, "NAMA_MAPPING.json")
 
 _JPEG_CACHE = {}
+_MANUAL_CACHE = {}  # path -> (mtime, file_list)
+_MAPPING_CACHE = None
+_MAPPING_MTIME = 0
+_LAST_META = {}  # last used: src_path, variant, bytes, source_mode, folder
+
 _WIB = timezone(timedelta(hours=7))
 _UTC = timezone.utc
+
+# === VALIDASI & CONFIG ===
+_VALID_PHOTO_SOURCES = {"pool", "manual"}
+_DEFAULT_PHOTO_SOURCE = "pool"
+
+# Variant weights: asli 40%, blur ringan 20%, blur berat 10%, kabur glare 15%, noisy gelap 15%
+_VARIANT_CHOICES = ["asli", "blur_ringan", "blur_berat", "kabur_glare", "noisy_gelap"]
+_VARIANT_WEIGHTS = [40, 20, 10, 15, 15]
 
 # ============================================================
 # REAL LOCATIONS - dari API manual (13 alamat unik di sekitar GI MANGGARAI)
@@ -113,8 +128,369 @@ def _get_target_dim_720():
         return (720, 960) if random.random() < 0.7 else (1080, 1080)
 
 
+def sanitize_folder_name(name: str) -> str:
+    """Samakan dengan fetch_foto_server.py: uppercase alnum -> _, max 40."""
+    import re
+    if not name:
+        return "UNKNOWN"
+    s = re.sub(r'[^A-Za-z0-9]+', '_', name.strip()).upper()
+    s = s.strip('_')
+    return s[:40] or "UNKNOWN"
+
+
+def _scan_jpg(dir_path: str):
+    """Scan jpg/jpeg/png di folder, skip .gitkeep, instruction txt, handle spasi WhatsApp name."""
+    if not dir_path or not os.path.isdir(dir_path):
+        return []
+    # cache check by mtime
+    try:
+        mtime = os.path.getmtime(dir_path)
+    except:
+        mtime = 0
+    cache_key = dir_path
+    if cache_key in _MANUAL_CACHE:
+        cached_mtime, cached_list = _MANUAL_CACHE[cache_key]
+        if cached_mtime == mtime:
+            return cached_list
+
+    files = []
+    try:
+        for fn in os.listdir(dir_path):
+            low = fn.lower()
+            if fn.startswith('.'):
+                continue
+            if fn in ('.gitkeep',):
+                continue
+            if fn.upper().startswith('TARUH_FOTO') or fn.upper().startswith('README'):
+                continue
+            if fn.lower().endswith(('.txt', '.md', '.json')):
+                continue
+            if low.endswith(('.jpg', '.jpeg', '.png', '.png.png', '.jpg.jpg')) or ('.' not in fn):
+                full = os.path.join(dir_path, fn)
+                if os.path.isfile(full):
+                    try:
+                        sz = os.path.getsize(full)
+                        if sz > 5000:
+                            # check extension after all
+                            if low.endswith(('.jpg', '.jpeg', '.png')) or '.' not in fn:
+                                files.append(full)
+                    except:
+                        pass
+    except:
+        pass
+
+    # Dedup
+    files = list(dict.fromkeys(files))
+    _MANUAL_CACHE[cache_key] = (mtime, files)
+    return files
+
+
+def _load_mapping():
+    """Load NAMA_MAPPING.json cache."""
+    global _MAPPING_CACHE, _MAPPING_MTIME
+    if not os.path.isfile(_NAMA_MAPPING_PATH):
+        return {}
+    try:
+        mtime = os.path.getmtime(_NAMA_MAPPING_PATH)
+        if _MAPPING_CACHE is not None and _MAPPING_MTIME == mtime:
+            return _MAPPING_CACHE
+        import json
+        with open(_NAMA_MAPPING_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        _MAPPING_CACHE = data
+        _MAPPING_MTIME = mtime
+        return data
+    except Exception:
+        return _MAPPING_CACHE if _MAPPING_CACHE is not None else {}
+
+
+def _load_photo_source_from_config():
+    """Baca photo_source dari .superi_config.json tanpa import circular."""
+    # Env override
+    env_val = os.environ.get("SUPERI_PHOTO_SOURCE", "").strip().lower()
+    if env_val in _VALID_PHOTO_SOURCES:
+        return env_val
+    # Try project config
+    cfg_paths = [
+        os.path.join(_SCRIPT_DIR, ".superi_config.json"),
+        os.path.join(_SCRIPT_DIR, ".superi_config.json.bak"),
+        os.path.expanduser("~/.superi_config.json"),
+    ]
+    for cp in cfg_paths:
+        if os.path.isfile(cp):
+            try:
+                import json
+                with open(cp, 'r') as f:
+                    cfg = json.load(f)
+                v = str(cfg.get("photo_source", "")).lower().strip()
+                if v in _VALID_PHOTO_SOURCES:
+                    return v
+            except:
+                continue
+    return _DEFAULT_PHOTO_SOURCE
+
+
+def _get_photo_pool_per_item(item_name=None, data_type=None, subtype=None, photo_source=None):
+    """
+    Resolver per-item untuk manual vs pool.
+
+    Priority:
+      Layer1: photo/manual/{data_type}/{SANITIZED}/ atau {data_type}/{SANITIZED}/{hv|mv}/ untuk tegangan
+      Layer2: photo/manual/{data_type}/_generic/ (optional)
+      Layer3: photo/pool/ (generic)
+      Layer4: [] -> synthetic fallback
+
+    Returns: (file_list, source_mode, folder_label, full_dir_path)
+    """
+    src = (photo_source or _load_photo_source_from_config() or _DEFAULT_PHOTO_SOURCE).lower().strip()
+    if src not in _VALID_PHOTO_SOURCES:
+        src = _DEFAULT_PHOTO_SOURCE
+
+    if src == "manual" and item_name and data_type:
+        sanitized = sanitize_folder_name(item_name)
+
+        # Tegangan: hv/mv terpisah per trafo
+        if data_type == "tegangan-trafo" and subtype:
+            sub = subtype.lower()  # hv or mv
+            # photo/manual/tegangan-trafo/TRAFO_1/hv/
+            target = os.path.join(_MANUAL_POOL_BASE, data_type, sanitized, sub)
+            files = _scan_jpg(target)
+            if files:
+                return files, "manual", f"{sanitized}/{sub}", target
+            # Fallback: jika hv/mv folder kosong tapi ada foto di folder trafo langsung (tanpa sub)
+            target_parent = os.path.join(_MANUAL_POOL_BASE, data_type, sanitized)
+            files_parent = _scan_jpg(target_parent)
+            if files_parent:
+                # Filter by filename contains hv/mv if available
+                filtered = [f for f in files_parent if sub in os.path.basename(f).lower()]
+                if filtered:
+                    return filtered, "manual", f"{sanitized}/(filtered {sub})", target_parent
+                # If no filtered, use all parent files for both hv/mv (still per-item)
+                return files_parent, "manual", f"{sanitized}/(shared)", target_parent
+        else:
+            # beban-penyulang / beban-trafo per-item folder
+            target = os.path.join(_MANUAL_POOL_BASE, data_type, sanitized)
+            files = _scan_jpg(target)
+            if files:
+                return files, "manual", sanitized, target
+
+        # Fallback generic manual per tipe: photo/manual/{type}/_generic/ or flat files in type
+        generic_dir = os.path.join(_MANUAL_POOL_BASE, data_type, "_generic")
+        files_generic = _scan_jpg(generic_dir)
+        if files_generic:
+            return files_generic, "manual-generic", f"{data_type}/_generic", generic_dir
+
+        # Also check flat files directly in data_type folder (without subfolder)
+        type_dir = os.path.join(_MANUAL_POOL_BASE, data_type)
+        if os.path.isdir(type_dir):
+            # Only flat files, not subdirs
+            flat_files = []
+            try:
+                for fn in os.listdir(type_dir):
+                    full = os.path.join(type_dir, fn)
+                    if os.path.isfile(full) and fn.lower().endswith(('.jpg', '.jpeg', '.png')):
+                        if os.path.getsize(full) > 5000:
+                            flat_files.append(full)
+            except:
+                pass
+            if flat_files:
+                return flat_files, "manual-generic", f"{data_type}/(flat)", type_dir
+
+    # Layer3: pool generic (used for both pool mode and manual fallback)
+    pool_files = _scan_jpg(_PHOTO_POOL_DIR)
+    # Also try flat _get_photo_pool legacy fallback if scan empty
+    if not pool_files:
+        # legacy method: scan pool dir again with looser filter
+        try:
+            for fn in os.listdir(_PHOTO_POOL_DIR):
+                full = os.path.join(_PHOTO_POOL_DIR, fn)
+                if os.path.isfile(full) and os.path.getsize(full) > 10000:
+                    if fn.lower().endswith(('.jpg', '.jpeg', '.png')):
+                        pool_files.append(full)
+        except:
+            pass
+
+    if pool_files:
+        return pool_files, "pool", "_pool", _PHOTO_POOL_DIR
+
+    return [], "synthetic", "none", None
+
+
+def _apply_variant_transform(img, mode="auto"):
+    """
+    Varian blur/kabur/asli + noisy gelap (untuk jam 00-06).
+    Returns (img, variant_name)
+    """
+    try:
+        from PIL import ImageDraw, ImageEnhance, ImageFilter
+    except ImportError:
+        return img, "asli"
+
+    if mode == "auto" or mode is None:
+        mode = random.choices(_VARIANT_CHOICES, weights=_VARIANT_WEIGHTS)[0]
+
+    if mode == "asli":
+        return img, "asli"
+    elif mode == "blur_ringan":
+        try:
+            r = random.uniform(0.4, 0.9)
+            img = img.filter(ImageFilter.GaussianBlur(radius=r))
+            img = ImageEnhance.Brightness(img).enhance(random.uniform(0.92, 1.06))
+            img = ImageEnhance.Contrast(img).enhance(random.uniform(0.95, 1.05))
+        except Exception:
+            pass
+        return img, "blur_ringan"
+    elif mode == "blur_berat":
+        try:
+            r = random.uniform(1.0, 2.2)
+            img = img.filter(ImageFilter.GaussianBlur(radius=r))
+            img = ImageEnhance.Brightness(img).enhance(random.uniform(0.85, 0.95))
+            img = ImageEnhance.Contrast(img).enhance(random.uniform(0.90, 1.00))
+        except Exception:
+            pass
+        return img, "blur_berat"
+    elif mode == "kabur_glare":
+        try:
+            w, h = img.size
+            draw = ImageDraw.Draw(img)
+            gx = random.randint(0, max(0, w // 3))
+            gy = random.randint(0, max(0, h // 3))
+            gw = random.randint(80, 240)
+            gh = random.randint(30, 110)
+            # glare ellipse putih kekuningan
+            draw.ellipse([gx, gy, gx+gw, gy+gh], fill=(255, 255, 240))
+            img = img.filter(ImageFilter.GaussianBlur(radius=0.5))
+            img = ImageEnhance.Brightness(img).enhance(random.uniform(0.95, 1.08))
+        except Exception:
+            pass
+        return img, "kabur_glare"
+    elif mode == "noisy_gelap":
+        try:
+            w, h = img.size
+            draw = ImageDraw.Draw(img)
+            # grain 8k-12k (reduce from 15k-20k to keep size 20-80KB)
+            for _ in range(random.randint(8000, 12000)):
+                x = random.randint(0, w-1)
+                y = random.randint(0, h-1)
+                try:
+                    r, g, b = img.getpixel((x, y))
+                    nv = random.randint(-25, 30)
+                    # dark grain
+                    if random.random() < 0.12:
+                        nv2 = random.randint(30, 90)
+                        draw.point((x, y), fill=(
+                            max(0, min(255, r + nv2)),
+                            max(0, min(255, g + nv2)),
+                            max(0, min(255, b + nv2)),
+                        ))
+                    else:
+                        draw.point((x, y), fill=(
+                            max(0, min(255, r + nv)),
+                            max(0, min(255, g + nv)),
+                            max(0, min(255, b + nv)),
+                        ))
+                except:
+                    pass
+            img = ImageEnhance.Brightness(img).enhance(random.uniform(0.70, 0.90))
+            img = ImageEnhance.Contrast(img).enhance(random.uniform(0.85, 1.00))
+        except Exception:
+            pass
+        return img, "noisy_gelap"
+    else:
+        return img, "asli"
+
+
+def get_last_meta():
+    """Return last used meta: src_path, variant, bytes, source_mode, folder"""
+    return dict(_LAST_META)
+
+
+def get_manual_count(item_name, data_type, subtype=None):
+    """Count foto per item untuk UI CLI."""
+    if not item_name or not data_type:
+        return 0
+    sanitized = sanitize_folder_name(item_name)
+    if data_type == "tegangan-trafo" and subtype:
+        target = os.path.join(_MANUAL_POOL_BASE, data_type, sanitized, subtype.lower())
+        files = _scan_jpg(target)
+        if not files:
+            # fallback parent
+            parent = os.path.join(_MANUAL_POOL_BASE, data_type, sanitized)
+            files = _scan_jpg(parent)
+        return len(files)
+    else:
+        target = os.path.join(_MANUAL_POOL_BASE, data_type, sanitized)
+        return len(_scan_jpg(target))
+
+
+def get_pool_stats():
+    """Return stats untuk CLI settings."""
+    stats = {
+        "pool": len(_scan_jpg(_PHOTO_POOL_DIR)),
+        "manual": {
+            "beban-penyulang": {"count": 0, "folders": 0, "files": 0},
+            "beban-trafo": {"count": 0, "folders": 0, "files": 0},
+            "tegangan-trafo": {"count": 0, "folders": 0, "files": 0, "hv": 0, "mv": 0, "total": 0},
+        },
+        "total_manual": 0,
+    }
+    # beban-penyulang
+    bp_base = os.path.join(_MANUAL_POOL_BASE, "beban-penyulang")
+    if os.path.isdir(bp_base):
+        for d in os.listdir(bp_base):
+            full = os.path.join(bp_base, d)
+            if os.path.isdir(full):
+                cnt = len(_scan_jpg(full))
+                if cnt > 0:
+                    stats["manual"]["beban-penyulang"]["folders"] += 1
+                    stats["manual"]["beban-penyulang"]["files"] += cnt
+        stats["manual"]["beban-penyulang"]["count"] = stats["manual"]["beban-penyulang"]["folders"]
+
+    bt_base = os.path.join(_MANUAL_POOL_BASE, "beban-trafo")
+    if os.path.isdir(bt_base):
+        for d in os.listdir(bt_base):
+            full = os.path.join(bt_base, d)
+            if os.path.isdir(full):
+                cnt = len(_scan_jpg(full))
+                if cnt > 0:
+                    stats["manual"]["beban-trafo"]["folders"] += 1
+                    stats["manual"]["beban-trafo"]["files"] += cnt
+        stats["manual"]["beban-trafo"]["count"] = stats["manual"]["beban-trafo"]["folders"]
+
+    tt_base = os.path.join(_MANUAL_POOL_BASE, "tegangan-trafo")
+    if os.path.isdir(tt_base):
+        hv_total = 0
+        mv_total = 0
+        folders = 0
+        for trafo in os.listdir(tt_base):
+            trafo_path = os.path.join(tt_base, trafo)
+            if not os.path.isdir(trafo_path):
+                continue
+            hv_path = os.path.join(trafo_path, "hv")
+            mv_path = os.path.join(trafo_path, "mv")
+            cnt_hv = len(_scan_jpg(hv_path)) if os.path.isdir(hv_path) else 0
+            cnt_mv = len(_scan_jpg(mv_path)) if os.path.isdir(mv_path) else 0
+            if cnt_hv > 0 or cnt_mv > 0:
+                folders += 1
+            hv_total += cnt_hv
+            mv_total += cnt_mv
+        stats["manual"]["tegangan-trafo"]["folders"] = folders
+        stats["manual"]["tegangan-trafo"]["hv"] = hv_total
+        stats["manual"]["tegangan-trafo"]["mv"] = mv_total
+        stats["manual"]["tegangan-trafo"]["total"] = hv_total + mv_total
+
+    stats["total_manual"] = (
+        stats["manual"]["beban-penyulang"]["files"] +
+        stats["manual"]["beban-trafo"]["files"] +
+        stats["manual"]["tegangan-trafo"]["total"]
+    )
+    return stats
+
+
 def _get_photo_pool():
-    """Pool of real operator sample photos in photo/pool/ - supports jpg/jpeg/png."""
+    """Pool of real operator sample photos in photo/pool/ - supports jpg/jpeg/png.
+    Legacy wrapper, now calls _scan_jpg.
+    """
     if not os.path.isdir(_PHOTO_POOL_DIR):
         return []
     files = []
@@ -175,18 +551,24 @@ def _crop_center_square(im):
     return im.crop((left, top, right, bottom))
 
 
-def _reencode_pool_image(path: str, target_w: int = None, target_h: int = None):
+def _reencode_pool_image(path: str, target_w: int = None, target_h: int = None, variant_mode: str = "auto"):
     """
     Re-encode pool image ke 720x720 square mirip app asli.
-    
+
     Proses:
     1. Open + convert RGB
     2. Crop center square (anti bypass: dimensi jadi square 720x720 seperti app)
     3. Resize ke target_w x target_h (default 720x720, weighted sesuai audit)
-    4. Variasi pixel halus (1-3 pixel tweak) — anti hash duplicate
-    5. Save baseline JPEG (progressive=False, no EXIF, no COM)
-    
-    Returns: JPEG bytes atau None
+    4. VARIAN: asli / blur_ringan / blur_berat / kabur_glare / noisy_gelap (random 40/20/10/15/15)
+    5. Variasi pixel halus (1-3 pixel tweak) — anti hash duplicate
+    6. Save baseline JPEG (progressive=False, no EXIF, no COM)
+
+    Args:
+        path: path foto source
+        target_w, target_h: target dimensi
+        variant_mode: "auto" (random) atau "asli"/"blur_ringan"/"blur_berat"/"kabur_glare"/"noisy_gelap"
+
+    Returns: JPEG bytes atau None. _LAST_META di-update dengan variant + src_path
     """
     try:
         from PIL import Image
@@ -213,6 +595,13 @@ def _reencode_pool_image(path: str, target_w: int = None, target_h: int = None):
         # Resize ke target (720x720)
         if im.size != (target_w, target_h):
             im = im.resize((target_w, target_h), Image.LANCZOS)
+
+        # === VARIAN blur/kabur/asli/noisy (request user) ===
+        variant_used = "asli"
+        try:
+            im, variant_used = _apply_variant_transform(im, mode=variant_mode)
+        except Exception:
+            variant_used = variant_mode if variant_mode != "auto" else "asli"
 
         w, h = im.size
 
@@ -296,11 +685,41 @@ def _reencode_pool_image(path: str, target_w: int = None, target_h: int = None):
             im.save(out, format='JPEG', quality=96, optimize=True, exif=b'', progressive=False)
             data = out.getvalue()
 
-        # Jika terlalu besar (>80KB) untuk 720x720, turunkan quality sedikit
-        if len(data) > 80000 and target_w <= 720:
-            out = io.BytesIO()
-            im.save(out, format='JPEG', quality=max(78, q - 12), optimize=True, exif=b'', progressive=False)
-            data = out.getvalue()
+        # Batasi ukuran: loop quality turun sampai <70KB untuk tegangan (2 file total <140KB)
+        # dan <80KB untuk beban. Audit server: 14-51KB avg 27KB, jadi target 20-60KB ideal.
+        # Sebelumnya hanya 1x re-encode, sekarang loop sampai target.
+        if target_w <= 720 and len(data) > 70000:
+            # Loop turunkan quality sampai <70KB atau quality 60
+            for q_try in range(max(60, q - 12), 59, -3):
+                out = io.BytesIO()
+                im.save(out, format='JPEG', quality=q_try, optimize=True, exif=b'', progressive=False)
+                nd = out.getvalue()
+                if len(nd) <= 70000 or q_try <= 60:
+                    data = nd
+                    break
+                if len(nd) < len(data):
+                    data = nd
+
+        # Jika masih >70KB (edge case foto sangat kompleks), resize lebih kecil sedikit 640x640 lalu encode
+        if len(data) > 75000 and target_w <= 720:
+            try:
+                im_small = im.resize((640, 640), Image.LANCZOS)
+                out = io.BytesIO()
+                im_small.save(out, format='JPEG', quality=78, optimize=True, exif=b'', progressive=False)
+                nd = out.getvalue()
+                if 12000 <= len(nd) <= 75000:
+                    data = nd
+            except Exception:
+                pass
+
+        # Simpan meta terakhir untuk logging CLI (src_path, variant, size)
+        try:
+            _LAST_META["src_path"] = path
+            _LAST_META["src_basename"] = os.path.basename(path)
+            _LAST_META["variant"] = variant_used
+            _LAST_META["bytes"] = len(data)
+        except:
+            pass
 
         return data
 
@@ -429,30 +848,51 @@ def _rand_jpeg_via_pil(width=None, height=None, quality=None):
     return out.getvalue()
 
 
-def rand_jpeg_bytes(target_w: int = None, target_h: int = None):
+def rand_jpeg_bytes(target_w: int = None, target_h: int = None, item_name: str = None, data_type: str = None, subtype: str = None, photo_source: str = None, variant_mode: str = None):
     """
     Return valid JPEG bytes 720x720 square mirip app asli.
-    
-    - Ambil dari pool (photo/pool/) -> crop center square -> resize 720x720
+
+    - Jika photo_source=manual + item_name ada -> ambil dari photo/manual/{data_type}/{ITEM}/ (per-item sesuai)
+      + hv/mv terpisah untuk tegangan (photo/manual/tegangan-trafo/TRAFO_1/hv/ & mv/)
+      + random pick + varian blur/kabur/asli/noisy_gelap (40/20/10/15/15)
+    - Jika photo_source=pool (default) -> ambil dari photo/pool/ 1 foto untuk semua
     - Fallback synthetic 720x720 jika pool kosong
     - Baseline JPEG, no progressive, no COM, no EXIF
     - Size 15-60KB (match audit server 14-51KB avg 27KB)
-    
+    - Nama file upload TETAP pakai humanizer: fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg (bukan basename manual)
+
     Args:
         target_w, target_h: opsional target dimensi (default 720x720)
-    
+        item_name: nama penyulang/trafo untuk per-item pool
+        data_type: beban-penyulang / beban-trafo / tegangan-trafo
+        subtype: untuk tegangan: HV atau MV
+        photo_source: "pool" (1 foto semua) atau "manual" (per-item sesuai)
+        variant_mode: "auto" atau "asli"/"blur_ringan"/"blur_berat"/"kabur_glare"/"noisy_gelap"
+
     Returns:
         bytes JPEG valid
     """
     if target_w is None or target_h is None:
         target_w, target_h = _get_target_dim_720()
 
-    pool = _get_photo_pool()
-    if pool:
-        # Coba 5 kali dari pool
+    # Resolver per-item pool (manual vs pool) — content only, filename tetap humanizer
+    pool_files, src_mode, folder_label, full_dir = _get_photo_pool_per_item(
+        item_name=item_name, data_type=data_type, subtype=subtype, photo_source=photo_source
+    )
+
+    # Update last meta untuk tracking
+    _LAST_META["source_mode"] = src_mode
+    _LAST_META["folder_label"] = folder_label
+    _LAST_META["full_dir"] = full_dir or ""
+    _LAST_META["item_name"] = item_name or ""
+    _LAST_META["data_type"] = data_type or ""
+
+    if pool_files:
+        # Coba 5 kali dari pool (random pick per input)
         for _ in range(5):
-            p = random.choice(pool)
-            enc = _reencode_pool_image(p, target_w, target_h)
+            p = random.choice(pool_files)
+            # variant_mode: auto = random 40% asli, 20% blur_ringan, 10% blur_berat, 15% kabur_glare, 15% noisy_gelap
+            enc = _reencode_pool_image(p, target_w, target_h, variant_mode=variant_mode or "auto")
             if enc and enc.startswith(b"\xff\xd8") and len(enc) >= 8000:
                 # Validasi dimensi
                 try:
@@ -474,7 +914,7 @@ def rand_jpeg_bytes(target_w: int = None, target_h: int = None):
         # Fallback: baca raw dan crop paksa ke 720x720
         try:
             from PIL import Image
-            raw_path = random.choice(pool)
+            raw_path = random.choice(pool_files)
             with open(raw_path, 'rb') as f:
                 raw = f.read()
             if raw.startswith(b'\xff\xd8') and len(raw) >= 5000:
@@ -483,10 +923,19 @@ def rand_jpeg_bytes(target_w: int = None, target_h: int = None):
                     im = im.convert('RGB')
                 im = _crop_center_square(im)
                 im = im.resize((target_w, target_h), Image.LANCZOS)
+                # variant untuk fallback raw juga
+                try:
+                    im, _ = _apply_variant_transform(im, mode=variant_mode or "auto")
+                except:
+                    pass
                 out = io.BytesIO()
                 im.save(out, format='JPEG', quality=random.randint(82, 93), optimize=True, exif=b'', progressive=False)
                 data = out.getvalue()
                 if len(data) >= 10000:
+                    # update meta
+                    _LAST_META["src_path"] = raw_path
+                    _LAST_META["src_basename"] = os.path.basename(raw_path)
+                    _LAST_META["bytes"] = len(data)
                     return data
         except Exception:
             pass
@@ -495,16 +944,21 @@ def rand_jpeg_bytes(target_w: int = None, target_h: int = None):
     for _ in range(5):
         gen = _rand_jpeg_via_pil(target_w, target_h)
         if gen and gen.startswith(b"\xff\xd8") and len(gen) >= 8000:
+            _LAST_META["source_mode"] = "synthetic"
+            _LAST_META["variant"] = "synthetic"
+            _LAST_META["bytes"] = len(gen)
             return gen
 
     # Last fallback: minimal 720x720 valid JPEG (1x1 dummy di-expand ke 720x720 gray)
-    # Ini seharusnya tidak terjadi jika pool ada, tapi safety
     try:
         from PIL import Image
         img = Image.new('RGB', (target_w, target_h), (random.randint(30, 60), random.randint(30, 60), random.randint(35, 65)))
         out = io.BytesIO()
         img.save(out, format='JPEG', quality=85, optimize=True, exif=b'', progressive=False)
-        return out.getvalue()
+        data = out.getvalue()
+        _LAST_META["source_mode"] = "gray-fallback"
+        _LAST_META["bytes"] = len(data)
+        return data
     except:
         pass
 
@@ -544,18 +998,59 @@ def rand_jpeg_bytes(target_w: int = None, target_h: int = None):
     return base
 
 
-def rand_jpeg_pair(target_w: int = None, target_h: int = None):
-    """Two different valid JPEGs 720x720 untuk tegangan (HV + MV)."""
+def rand_jpeg_pair(target_w: int = None, target_h: int = None, item_name: str = None, data_type: str = None, photo_source: str = None, variant_mode: str = None):
+    """Two different valid JPEGs 720x720 untuk tegangan (HV + MV) - mirip aplikasi asli.
+
+    APK GAMA asli: fotoHV.jpg & fotoMV.jpg, 2 file field 'files', baseline 720x720, no EXIF.
+    Project kita tetap pakai penamaan: fotoHV_YYYY-MM-DD_<hex>.jpg / fotoMV_... (humanizer)
+    Content: dari photo/manual/tegangan-trafo/TRAFO_1/hv/, mv/ terpisah, varian blur/kabur/asli.
+
+    Perbaikan agar tidak dianggap robot & foto terbaca server:
+    - HV dan MV harus distinct (hash beda, size beda minimal 1KB)
+    - Jika manual, HV dari hv/ folder, MV dari mv/ folder (terpisah)
+    - Jika pool, 1 file untuk semua tapi tetap distinct via variant
+    - Pastikan baseline, no progressive, no COM, no EXIF (audit server)
+    """
     if target_w is None or target_h is None:
         target_w, target_h = _get_target_dim_720()
 
-    for _ in range(10):
-        j1 = rand_jpeg_bytes(target_w, target_h)
-        j2 = rand_jpeg_bytes(target_w, target_h)
-        if j1 != j2 and hashlib.sha256(j1).hexdigest() != hashlib.sha256(j2).hexdigest():
-            return j1, j2
-    # fallback pair dengan variasi dimensi ringan jika tetap sama
-    return rand_jpeg_bytes(target_w, target_h), rand_jpeg_bytes(target_w, target_h)
+    for attempt in range(15):
+        # Untuk tegangan, paksa variant berbeda agar tidak dianggap duplicate oleh server
+        # APK asli: HV dan MV adalah 2 foto berbeda (beda waktu 12-42 detik, lokasi 2-5m)
+        # Kita: HV pakai variant random, MV pakai variant berbeda
+        v1 = None
+        v2 = None
+        if attempt % 2 == 0:
+            # Coba variant berbeda
+            variants = ["asli", "blur_ringan", "blur_berat", "kabur_glare", "noisy_gelap"]
+            v1 = random.choice(variants)
+            v2 = random.choice([x for x in variants if x != v1])
+
+        j1 = rand_jpeg_bytes(target_w, target_h, item_name=item_name, data_type=data_type or "tegangan-trafo", subtype="HV", photo_source=photo_source, variant_mode=v1 or variant_mode)
+        j2 = rand_jpeg_bytes(target_w, target_h, item_name=item_name, data_type=data_type or "tegangan-trafo", subtype="MV", photo_source=photo_source, variant_mode=v2 or variant_mode)
+
+        # Validasi: harus JPEG valid, size 15-70KB, hash beda
+        if not j1 or not j2:
+            continue
+        if len(j1) < 12000 or len(j2) < 12000:
+            continue
+        if len(j1) > 75000 or len(j2) > 75000:
+            # Jika masih >75KB, coba lagi (loop quality di _reencode sudah handle, tapi double-check)
+            continue
+        if j1 == j2:
+            continue
+        if hashlib.sha256(j1).hexdigest() == hashlib.sha256(j2).hexdigest():
+            continue
+        # Pastikan size beda minimal 500 byte (tidak identik)
+        if abs(len(j1) - len(j2)) < 500 and attempt < 10:
+            # Coba lagi biar size beda (lebih natural seperti 2 foto berbeda)
+            continue
+        return j1, j2
+
+    # fallback: paksa distinct dengan resize quality berbeda
+    j1 = rand_jpeg_bytes(target_w, target_h, item_name=item_name, data_type=data_type, subtype="HV", photo_source=photo_source, variant_mode="asli")
+    j2 = rand_jpeg_bytes(target_w, target_h, item_name=item_name, data_type=data_type, subtype="MV", photo_source=photo_source, variant_mode="blur_ringan")
+    return j1, j2
 
 
 # ============================================================

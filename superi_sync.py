@@ -24,7 +24,7 @@ import urllib.error
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 # ============ PATHS ============
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))

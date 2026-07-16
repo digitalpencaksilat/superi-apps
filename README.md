@@ -2,7 +2,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/SUPER--I%20APP-Automation-blue?style=for-the-badge&logo=lightning&logoColor=white" alt="SUPER-I APP"/>
-  <img src="https://img.shields.io/badge/Version-1.2.0-orange?style=for-the-badge" alt="Version 1.2.0"/>
+  <img src="https://img.shields.io/badge/Version-1.3.0-orange?style=for-the-badge" alt="Version 1.3.0"/>
   <img src="https://img.shields.io/badge/Python-3.8+-green?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.8+"/>
   <img src="https://img.shields.io/badge/Status-Production-success?style=for-the-badge" alt="Production"/>
 </p>
@@ -286,7 +286,7 @@ export PORTAL_PASSWORD=<PASSWORD>
 
 Project ini menggunakan [Semantic Versioning](https://semver.org/lang/id/).
 
-**Versi saat ini:** `1.2.0`
+**Versi saat ini:** `1.3.0`
 
 ```bash
 superi sync --version    # cek versi

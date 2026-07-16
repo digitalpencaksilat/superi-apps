@@ -6,5 +6,7 @@
   "portal_user": "username.portal.pln",
   "portal_password": "<PASSWORD>",
   "portal_gi_id": "143",
-  "history_days": 7
+  "history_days": 7,
+  "photo_source": "pool",
+  "auto_enabled": false
 }

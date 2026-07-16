@@ -5,6 +5,139 @@ Semua perubahan penting pada project ini akan didokumentasikan di file ini.
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0),
 dan project ini menggunakan [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.3.0] — 2026-07-17
+
+### Added
+
+- **Pool foto manual per-item sesuai input + varian blur/kabur/asli anti-robotik (request utama).**
+  - Struktur baru `photo/manual/` (gitignored, tidak ikut push):
+    - `beban-penyulang/` = 32 folder per penyulang (CASABLANCA4, LABORATORIUM, dll)
+      25 ON + 7 OFF, OFF tetap simpan 84 foto tapi skip input CB OFF.
+    - `beban-trafo/` = 3 folder TRAFO_1/2/3
+    - `tegangan-trafo/` = 5 trafo × `hv/` + `mv/` terpisah (HV 150kV vs MV 20kV fisik beda)
+    - `NAMA_MAPPING.json` auto-generate: id, cb status, trafo parent, path folder.
+    - `README.md` panduan cara foto: close-up + wide + 45°, hindari flash, >100KB ideal.
+  - Scan `photo/manual/` robust:
+    - `_scan_jpg()` skip `.gitkeep`, `TARUH_FOTO`, `README.md`, `.txt/.json`, validasi size >5KB
+    - Handle nama file WhatsApp dengan spasi `WhatsApp Image 2026-07-17 at 00.33.07.jpeg`
+    - Cache by mtime `_MANUAL_CACHE` biar tidak re-scan tiap input.
+    - `_load_mapping()` cache `NAMA_MAPPING.json` dengan mtime.
+    - `sanitize_folder_name()` uppercase alnum → `_`, max 40, match `fetch_foto_server.py`.
+  - Resolver `_get_photo_pool_per_item(item_name, data_type, subtype, photo_source)`:
+    - `manual`: cari folder `photo/manual/{data_type}/{SANITIZED_ITEM}/`, jika tegangan cari `hv/`/`mv/` terpisah
+      fallback ke `photo/pool/` jika folder kosong, fallback lagi ke synthetic.
+    - `pool`: pakai `photo/pool/` 1 foto untuk semua (generic, re-encode crop square ±5% + jitter).
+    - Return `pool_files, source_mode, folder_label, full_dir`.
+  - Varian visual anti-duplicate hash (request user blur/kabur/asli):
+    - `_apply_variant_transform(im, mode)` 5 varian:
+      - `asli` 40% — crop ±5% + resize 720x720 + pixel jitter 2-6 titik
+      - `blur_ringan` 20% — GaussianBlur radius 0.6-1.0 pelan seperti out-of-focus
+      - `blur_berat` 10% — GaussianBlur radius 1.4-2.2 defocus jelas
+      - `kabur_glare` 15% — overlay white 20-40% + brightness boost, simulasi pantulan lampu panel
+      - `noisy_gelap` 15% — darkness 0.6-0.85 + grain 8000-15000 titik, untuk jam 00-06 low-light
+    - Weighted random via `_VARIANT_CHOICES` / `_VARIANT_WEIGHTS`.
+    - `_LAST_META` tracking `{src_path, src_basename, variant, bytes, source_mode, folder_label}` untuk log CLI.
+  - Config `photo_source` baru di `.superi_config.json`:
+    - Valid values `pool` (1 foto semua) / `manual` (per-item sesuai), default `pool`.
+    - Env override `SUPERI_PHOTO_SOURCE` untuk testing.
+    - `get_photo_source()` / `set_photo_source()` di `superi_app.py` dan `superi_humanizer.py` (no circular).
+    - `.superi_config.example.json` tambah `photo_source`, `auto_enabled`.
+  - Menu baru `[T] 📸 Foto Source` di CLI utama:
+    - `[1] Ganti Sumber Foto` pool ↔ manual, preview varian 40/20/10/15/15.
+    - `[2] Ganti History Days` 3/7/14 untuk smart-suggest.
+    - `[3] Lihat Detail Pool per Item` tabel Nama, Count, CB, Type.
+    - `[4] Validasi Foto Manual` scan 500+ foto via `validate_manual_pool.py`.
+    - `[5] Panduan Cara Foto Manual` anti-robotik.
+    - `[6] Test Foto Random` lihat varian blur/kabur/asli live.
+    - Header foto source badge hijau MANUAL vs kuning POOL.
+  - `cli_render.py`: 3 helper baru
+    - `render_settings_box(photo_source, history_days, pool_count, manual_stats, total_manual)`
+    - `render_pool_status(detailed_rows)` tabel per-item
+    - `render_suggest_table_with_pool(rows)` suggest + pool count per item.
+  - Dokumentasi `photo/manual/README.md` lengkap: struktur, jumlah ideal 80-120 foto, cara import USB, validasi.
+
+- **Verifikasi foto tegangan HV/MV benar-benar tersimpan di server (bug MISSING URI).**
+  - Root cause: sebelumnya upload 2 file `files` dianggap sukses jika API return `success`, tapi server bisa simpan record
+    tapi gagal proses image → `fotoHV.uri`/`fotoMV.uri` = null (MISSING). Beban penyulang/beban trafo 1 foto jarang kena,
+    tegangan 2 foto kena bug Jam 3 (00-06) yang dilaporkan.
+  - Fix di `superi_app.py`:
+    - `_verify_tegangan_photo_upload(token, data_dict, result)`:
+      - Ambil `record_id` dari `result["data"]["id"]`.
+      - Retry 3× `api_get` list `garduIndukId + date`, cari record dengan id yang sama.
+      - Cek `fotoHV.uri` & `fotoMV.uri` harus ada, jika missing → `error = "URI foto HV/MV tidak dibuat server"`.
+      - Verifikasi media: download `/api{uri}` 2×, cek header `ff d8` JPEG valid + len >=1000.
+      - Jika gagal → return `{"ok": False, error}`.
+    - `api_post_multipart()`:
+      - Pop `_item_name_hint` dari payload agar tidak kirim ke server (400 unknown property).
+      - Untuk tegangan: transport filename wajib `fotoHV.jpg` / `fotoMV.jpg` seperti APK GAMA (backend tentukan slot dari filename),
+        content bytes tetap per-item manual hv/mv distinct + varian.
+      - Setelah upload sukses, jika `data_type == tegangan-trafo`, panggil `_verify_...` dan attach ke result `_photo_upload`.
+      - Di `batch_fill()` & `batch_fill_periode()` & `input_single()`:
+        - Jika `photo_check` fail → `api_delete` record gagal foto agar tidak jadi sampah MISSING uri, log `FOTO GAGAL -> dihapus`,
+          treat as fail untuk retry, detail `nilai tersimpan tapi FOTO GAGAL`.
+      - `_get_jpeg_bytes(single, item_name, data_type, subtype)` now per-item + photo_source aware.
+      - `rand_jpeg_pair()` distinct logic: loop 15×, variant berbeda HV vs MV, size diff >=500 byte, sha256 beda, size 12-75KB.
+      - `rand_jpeg_bytes()` pool_files per-item resolver + size cap 70KB loop quality 78→60 + fallback 640×640 if >75KB.
+  - Fix di `superi_input.py`:
+    - `submit_beban()` double-check distinct HV/MV sha256 + size diff >500 byte loop 8×.
+    - Pastikan filename HV≠MV (anti duplicate detection).
+    - Setelah sukses, verifikasi list fetch untuk cek uri HV+MV, jika missing hapus record & return False.
+  - Fix di `superi_auto.py`:
+    - `auto_input_trafo_from_penyulang()` & `auto_input_jam()` pass `item_name` ke `api_post_multipart`.
+    - Jika `photo_check` fail → delete record + log `RETRY-FOTO ... -> record dihapus`.
+  - Fix di `superi_web.py`:
+    - Refactor `api_post_multipart()` jadi wrapper ke `_cli.api_post_multipart()` (shared verified uploader + item_name),
+      sehingga CLI/Web/Auto konsisten format dan verifikasi foto (no code drift).
+      54 baris duplikasi lama dihapus, diganti 13 baris delegasi + `item_name` param.
+  - Alat bantu:
+    - `tools/fix_tegangan_jam3.py`: fix khusus periode 3 (jam 03) MISSING uri — cek penyulang/trafo P3 OK, hapus & re-upload tegangan P3 dengan foto valid + verifikasi uri.
+    - `tools/fetch_foto_server.py`: fetch foto asli dari server untuk audit 00-06, simpan `photo/server/YYYY-MM-DD/{tipe}/` + sidecar json + summary, support workers & filter tipe.
+    - `tools/validate_manual_pool.py`: scan `photo/manual/` 500+ foto, cek size min/max/avg, dimensi PIL, progressive `FFC2`, COM `FFFE`, EXIF, duplicate SHA, CSV export, detail per file.
+  - Contract tests `tests/test_multipart.py` baru (6 tests):
+    - `test_tegangan_uses_two_ordered_files_and_clean_json`: HV/MV ordered, filename `fotoHV.jpg`/`fotoMV.jpg`, `_item_name_hint` tidak masuk JSON payload, boundary custom, timeout 60.
+    - `test_verification_reports_missing_voltage_uris`: uri null → error `URI foto HV/MV tidak dibuat server`.
+    - `test_verification_fetches_both_voltage_images`: uri ada → download 2 image, size map HV/MV.
+    - `test_verification_retries_until_voltage_record_is_visible`: empty → listed, sleep 1×, retry 2×.
+    - `test_web_voltage_upload_uses_shared_verified_uploader`: web wrapper delegasi ke `app.api_post_multipart` dengan item_name.
+    - `test_server_side_voltage_filenames_remain_humanized`: `rand_filename` tetap `fotoHV_YYYY-MM-DD_<hex>.jpg` (humanized storage name, bukan simple).
+    - Payload mutation guard: `assertIn("_item_name_hint", payload)` setelah call (caller tidak boleh di-mutate).
+
+### Fixed
+
+- **Tegangan trafo foto MISSING (uri null) Jam 3 dan periode lain karena 2 file upload tidak terverifikasi.**
+  - Sebelumnya: success API langsung dianggap OK, record dengan foto gagal tetap tersimpan jadi sampah MISSING.
+  - Sekarang: verifikasi uri + JPEG valid, jika gagal hapus record otomatis + retry, list bersih tidak ada MISSING.
+- **Foto duplikat/hash sama untuk HV & MV tegangan karena random pool tanpa distinct check.**
+  - Sebelumnya `rand_jpeg_pair()` cuma `j1 != j2` string compare, bisa sama content karena re-encode same source.
+  - Sekarang: sha256 check + size diff >=500 byte + loop 15× variant berbeda + quality loop sampai <70KB.
+- **Foto >70KB kebesaran untuk server (edge case kompleks texture → 80KB+ → compress fail).**
+  - Sebelumnya 1× re-encode quality 78, jika masih >80KB cuma turun 12.
+  - Sekarang: loop quality 78→60 step 3 sampai ≤70KB, jika masih >75KB resize 640×640 quality 78, target 20-60KB ideal (audit 14-51KB avg 27KB).
+- **CLI/Web/Auto format multipart tidak konsisten (code drift) menyebabkan bug hanya di satu jalur.**
+  - Sebelumnya `superi_web.py` punya copy-paste `api_post_multipart` 54 baris beda logic.
+  - Sekarang shared uploader: web → `app.api_post_multipart` 13 baris delegasi, single source of truth.
+
+### Changed
+
+- `superi_app.py`: +575 lines — photo_source config, `_verify_tegangan_photo_upload`, pool per-item, variant handling, menu `[T] foto source`, distinct HV/MV.
+- `superi_humanizer.py`: +563/-34 lines — manual pool scanner, `_MANUAL_CACHE`, `_MAPPING_CACHE`, `_LAST_META`, sanitize, variant transforms blur/glare/noisy, resolver per-item, size cap, 720 crop ±5%, `get_pool_stats()`, `get_last_meta()`.
+- `superi_input.py`: +54 lines — distinct HV/MV double-check, filename dup guard, post-upload uri verification + auto-delete fail.
+- `superi_auto.py`: +18 lines — item_name pass + photo fail delete + retry logging.
+- `superi_web.py`: -54/+13 refactor — shared verified uploader, anti code-drift.
+- `cli_render.py`: +47 lines — 3 render helper settings box / pool status / suggest with pool.
+- `.superi_config.example.json`: +3 fields `photo_source`, `auto_enabled`.
+- `.gitignore` tetap ignore `photo/` (pool manual 500+ foto pribadi tidak ikut push).
+
+### Verified
+
+- `photo/manual/` 32 penyulang + 3 beban trafo + 5 tegangan hv/mv = 500+ file import HP WhatsApp name OK (scan skip `.txt`).
+- Manual mode: `CASABLANCA4` 14 foto, random pick per input + varian `asli 40% / blur_ringan 20% / blur_berat 10% / kabur_glare 15% / noisy_gelap 15%`, SHA beda tiap upload, filename tetap `fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg` (bukan basename manual), OFF CB skip input tapi foto tetap.
+- Pool mode: 1 foto generic `photo/pool/` untuk semua, re-encode 720×720 crop ±5% + jitter + quality 82-93 beda SHA.
+- Tegangan HV/MV: HV dari `TRAFO_1/hv/` random, MV dari `mv/` terpisah, distinct SHA + size diff ≥500B, transport filename `fotoHV.jpg`/`fotoMV.jpg` (APK parity), storage URI humanized `fotoHV_2026-07-17_<hex>.jpg`, verifikasi 2× download JPEG valid.
+- Bug P3 fix: record MISSING uri auto-delete + retry, list bersih, no MISSING after fix.
+- Size audit: HV 22-58KB, MV 24-65KB, beban 20-60KB, match server 14-51KB avg 27KB, baseline no progressive/COM/EXIF.
+- Tests: `tests/test_multipart.py` 6 new OK (payload mutation guard, ordered HV/MV, clean JSON, uri check, retry, humanized storage names) + `python3 tools/validate_manual_pool.py` 500+ file scan OK.
+
 ## [1.2.4] — 2026-07-16
 
 ### Fixed

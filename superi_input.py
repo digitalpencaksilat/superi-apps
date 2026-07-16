@@ -318,9 +318,20 @@ def submit_beban(token: str, data_type: str, gi_id: int, item_id: int,
     inner = json.dumps(data_dict)
     bd = _h_boundary()
 
+    # Penamaan file tetap pakai project kita (bukan fotoHV.jpg sederhana dari APK)
+    # APK pakai fotoHV.jpg / fotoMV.jpg, tapi kita pakai fotoHV_YYYY-MM-DD_<hex>.jpg agar anti-robot
+    # Content bytes mirip aplikasi asli: 720x720 baseline, no EXIF, varian blur/kabur
     if hu:
         if data_type == "tegangan-trafo":
+            # Untuk tegangan, HV dari hv/ folder, MV dari mv/ folder terpisah (manual mode)
+            # Pastikan distinct hash & size beda
             jb1, jb2 = hu.rand_jpeg_pair()
+            # Double-check distinct, jika sama coba lagi dengan variant berbeda
+            import hashlib as _hl
+            tries = 0
+            while (jb1 == jb2 or _hl.sha256(jb1).hexdigest() == _hl.sha256(jb2).hexdigest() or abs(len(jb1)-len(jb2)) < 500) and tries < 8:
+                jb1, jb2 = hu.rand_jpeg_pair()
+                tries += 1
             jpeg_pool = [jb1, jb2]
         else:
             jpeg_pool = [hu.rand_jpeg_bytes()]
@@ -331,8 +342,13 @@ def submit_beban(token: str, data_type: str, gi_id: int, item_id: int,
         f'--{bd}\r\nContent-Disposition: form-data; name="data"\r\n\r\n{inner}\r\n'.encode(),
     ]
     if data_type == "tegangan-trafo":
+        # APK asli: 2 file dengan field "files", filename fotoHV.jpg & fotoMV.jpg
+        # Project kita: tetap field "files" tapi filename humanizer fotoHV_YYYY-MM-DD_<hex>.jpg (request user)
         fn1 = _h_filename(ts1, idx=0, data_type=data_type, subtype="HV")
         fn2 = _h_filename(ts2, idx=1, data_type=data_type, subtype="MV")
+        # Pastikan filename tidak sama (anti duplicate detection server)
+        if fn1 == fn2:
+            fn2 = fn2.replace(".jpg", "_2.jpg")
         body_parts.append(f'--{bd}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fn1}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
         body_parts.append(jpeg_pool[0])
         body_parts.append(f'\r\n--{bd}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fn2}"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
@@ -360,7 +376,44 @@ def submit_beban(token: str, data_type: str, gi_id: int, item_id: int,
     
     msg = result.get("message", "")
     success = result.get("success", False)
-    
+
+    # Untuk tegangan: verifikasi foto benar-benar tersimpan (uri ada), bukan hanya record
+    if success and data_type == "tegangan-trafo":
+        try:
+            # Verifikasi sederhana: cek list apakah uri ada
+            rec_id = (result.get("data") or {}).get("id")
+            # Fetch list untuk periode ini
+            list_path = ENDPOINTS[data_type]["list"]
+            qs = f"garduIndukId={gi_id}&date={date_str_full}"
+            url_check = f"{API_BASE}{list_path}?{qs}"
+            req_check = urllib.request.Request(url_check, headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req_check, timeout=15) as resp_check:
+                listed = json.loads(resp_check.read())
+            # Cari record
+            found = None
+            for item in listed.get("data", {}).get("items", []):
+                for teg in item.get("tegangan", []):
+                    if teg.get("id") == rec_id:
+                        found = teg
+                        break
+            if found:
+                hv_uri = (found.get("fotoHV") or {}).get("uri")
+                mv_uri = (found.get("fotoMV") or {}).get("uri")
+                if not hv_uri or not mv_uri:
+                    print(f"  ⚠ BERHASIL tapi FOTO TIDAK TERSIMPAN! ID: {rec_id} | {found.get('hv')}kV/{found.get('mv')}kV | P{periode} | uri missing HV={bool(hv_uri)} MV={bool(mv_uri)}")
+                    print(f"  → Menghapus record gagal foto agar bisa retry...")
+                    try:
+                        del_url = f"{API_BASE}{ENDPOINTS[data_type]['delete']}/{rec_id}"
+                        del_req = urllib.request.Request(del_url, headers={"Authorization": f"Bearer {token}"}, method="DELETE")
+                        with urllib.request.urlopen(del_req, timeout=15) as del_resp:
+                            json.loads(del_resp.read())
+                        print(f"  ✓ Record {rec_id} dihapus, silakan retry")
+                    except Exception as del_e:
+                        print(f"  ✗ Gagal hapus record {rec_id}: {del_e}")
+                    return False
+        except Exception as ver_e:
+            print(f"  ⚠ Verifikasi foto gagal: {ver_e}")
+
     if success:
         data = result.get("data", {})
         nama = data.get("penyulang", data.get("trafo", {})).get("nama", "?")
