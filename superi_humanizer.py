@@ -92,42 +92,32 @@ _LAT_LONG_ADDRESSES = [
 ]
 
 # ============================================================
-# JPEG HANDLING - ANTI BYPASS: 720x720 SQUARE MIRIP APP ASLI
+# JPEG HANDLING - STRICT 720x720 SQUARE UNTUK SEMUA TIPE (ANTI BYPASS)
 # Audit server: stored 720x720 (95%) / 720x960 (5%), baseline JPEG,
 # no progressive, no COM, no EXIF, 14-51KB avg 27KB.
+# Requirement: SEMUA tipe (beban-penyulang, beban-trafo, tegangan-trafo) wajib 720x720.
 # Pool: ambil dari photo/pool/ -> crop center square 720x720
 # ============================================================
 
-# Target dimensi final (sesuai foto asli dari aplikasi)
-# Server menyimpan 720x720 dominan, jadi kita upload juga 720x720 agar tidak terdeteksi
-# sebagai bypass via log dimensi original.
+# Target dimensi final — STRICT 720x720 untuk semua tipe
+# Sebelumnya weighted 85% 720x720 + 15% outlier (720x960/1080x1080) untuk meniru real app.
+# Sekarang strict 720x720 100% sesuai requirement user (semua tipe).
 _TARGET_DIMS = [
-    # (W, H, weight) — 85% square 720x720, 15% variasi realistic
-    (720, 720, 60),   # dominan, match server stored
-    (720, 960, 8),    # portrait 3:4 — 5% terjadi di server (outlier asli)
-    (960, 720, 4),    # landscape
-    (1080, 1080, 12), # square HD — kamera HP crop
-    (1080, 1440, 6),  # portrait 3:4 HD
-    (1440, 1080, 4),  # landscape 4:3
-    (1440, 1440, 6),  # square bigger
+    # (W, H, weight) — strict 720x720 100%
+    (720, 720, 100),  # strict, match server stored 95%
 ]
 
+
 def _pick_target_dim():
-    """Pick (W,H) weighted sesuai audit server — dominan 720x720."""
-    choices = []
-    for w, h, wt in _TARGET_DIMS:
-        choices.extend([(w, h)] * wt)
-    return random.choice(choices)
+    """Pick (W,H) — strict 720x720 untuk semua tipe."""
+    # Deprecated weighted pick, sekarang strict 720x720
+    return (720, 720)
+
 
 def _get_target_dim_720():
-    """Default return 720x720 — untuk pool crop agar seragam dengan app asli."""
-    # 85% chance 720x720, 15% chance 720x960 (sesuai outlier server)
-    if random.random() < 0.85:
-        return (720, 720)
-    else:
-        return (720, 960) if random.random() < 0.7 else (1080, 1080)
-
-
+    """Default return 720x720 — strict untuk semua tipe (beban penyulang, trafo, tegangan)."""
+    # STRICT 720x720 100% — tidak ada lagi outlier 720x960/1080x1080
+    return (720, 720)
 def sanitize_folder_name(name: str) -> str:
     """Samakan dengan fetch_foto_server.py: uppercase alnum -> _, max 40."""
     import re
@@ -583,18 +573,16 @@ def _reencode_pool_image(path: str, target_w: int = None, target_h: int = None, 
         elif im.mode != 'RGB':
             im = im.convert('RGB')
 
-        # === ANTI BYPASS: CROP SQUARE + RESIZE KE 720x720 ===
-        if target_w is None or target_h is None:
-            target_w, target_h = _get_target_dim_720()
+        # === STRICT 720x720: SELALU CROP SQUARE + RESIZE KE 720x720 ===
+        # Requirement: semua tipe wajib 720x720, tidak ada lagi outlier 720x960
+        target_w, target_h = 720, 720
 
-        # Jika target square 720x720, crop center square dulu biar tidak stretch
-        if target_w == target_h:
-            # Crop center square dari original (misal 1200x1600 -> 1200x1200)
-            im = _crop_center_square(im)
+        # Selalu crop center square dulu biar tidak stretch (1200x1600 -> 1200x1200)
+        im = _crop_center_square(im)
 
-        # Resize ke target (720x720)
-        if im.size != (target_w, target_h):
-            im = im.resize((target_w, target_h), Image.LANCZOS)
+        # Resize ke 720x720 strict (LANCZOS high quality)
+        if im.size != (720, 720):
+            im = im.resize((720, 720), Image.LANCZOS)
 
         # === VARIAN blur/kabur/asli/noisy (request user) ===
         variant_used = "asli"
@@ -687,30 +675,40 @@ def _reencode_pool_image(path: str, target_w: int = None, target_h: int = None, 
 
         # Batasi ukuran: loop quality turun sampai <70KB untuk tegangan (2 file total <140KB)
         # dan <80KB untuk beban. Audit server: 14-51KB avg 27KB, jadi target 20-60KB ideal.
-        # Sebelumnya hanya 1x re-encode, sekarang loop sampai target.
-        if target_w <= 720 and len(data) > 70000:
-            # Loop turunkan quality sampai <70KB atau quality 60
-            for q_try in range(max(60, q - 12), 59, -3):
+        # STRICT 720x720: tetap 720x720, tidak boleh fallback ke 640x640
+        if len(data) > 70000:
+            # Loop turunkan quality sampai <70KB atau quality 50 (lebih agresif, tetap 720x720)
+            for q_try in range(max(50, q - 12), 49, -3):
                 out = io.BytesIO()
                 im.save(out, format='JPEG', quality=q_try, optimize=True, exif=b'', progressive=False)
                 nd = out.getvalue()
-                if len(nd) <= 70000 or q_try <= 60:
+                if len(nd) <= 70000 or q_try <= 50:
                     data = nd
                     break
                 if len(nd) < len(data):
                     data = nd
 
-        # Jika masih >70KB (edge case foto sangat kompleks), resize lebih kecil sedikit 640x640 lalu encode
-        if len(data) > 75000 and target_w <= 720:
+        # Jika masih >75KB setelah quality 50, coba tambah blur ringan untuk turunkan size
+        # (tetap 720x720, tidak boleh resize ke 640x640)
+        if len(data) > 75000:
             try:
-                im_small = im.resize((640, 640), Image.LANCZOS)
+                from PIL import ImageFilter
+                im_blur = im.filter(ImageFilter.GaussianBlur(radius=0.6))
                 out = io.BytesIO()
-                im_small.save(out, format='JPEG', quality=78, optimize=True, exif=b'', progressive=False)
+                im_blur.save(out, format='JPEG', quality=65, optimize=True, exif=b'', progressive=False)
                 nd = out.getvalue()
-                if 12000 <= len(nd) <= 75000:
+                if 12000 <= len(nd) <= 75000 and len(nd) < len(data):
                     data = nd
             except Exception:
-                pass
+                # Last resort: tetap 720x720 quality 50
+                try:
+                    out = io.BytesIO()
+                    im.save(out, format='JPEG', quality=50, optimize=True, exif=b'', progressive=False)
+                    nd = out.getvalue()
+                    if 12000 <= len(nd) <= 80000:
+                        data = nd
+                except Exception:
+                    pass
 
         # Simpan meta terakhir untuk logging CLI (src_path, variant, size)
         try:
@@ -724,7 +722,7 @@ def _reencode_pool_image(path: str, target_w: int = None, target_h: int = None, 
         return data
 
     except Exception as e:
-        # Fallback: coba baca raw dan re-encode minimal
+        # Fallback: coba baca raw dan re-encode minimal — STRICT 720x720
         try:
             from PIL import Image
             with open(path, 'rb') as f:
@@ -733,22 +731,20 @@ def _reencode_pool_image(path: str, target_w: int = None, target_h: int = None, 
                 im = Image.open(io.BytesIO(raw))
                 if im.mode != 'RGB':
                     im = im.convert('RGB')
-                # Crop square + resize 720x720
+                # Crop square + resize strict 720x720
                 im = _crop_center_square(im)
-                tw, th = _get_target_dim_720()
-                if im.size != (tw, th):
-                    im = im.resize((tw, th), Image.LANCZOS)
+                if im.size != (720, 720):
+                    im = im.resize((720, 720), Image.LANCZOS)
                 out = io.BytesIO()
                 im.save(out, format='JPEG', quality=random.randint(82, 92), optimize=True, exif=b'', progressive=False)
                 return out.getvalue()
-            # Jika JPEG tapi gagal diproses, coba tetap crop-resize paksa
+            # Jika JPEG tapi gagal diproses, coba tetap crop-resize paksa 720x720
             if raw.startswith(b'\xff\xd8'):
                 im = Image.open(io.BytesIO(raw))
                 if im.mode != 'RGB':
                     im = im.convert('RGB')
                 im = _crop_center_square(im)
-                tw, th = _get_target_dim_720()
-                im = im.resize((tw, th), Image.LANCZOS)
+                im = im.resize((720, 720), Image.LANCZOS)
                 out = io.BytesIO()
                 im.save(out, format='JPEG', quality=random.randint(82, 92), optimize=True, exif=b'', progressive=False)
                 return out.getvalue()
@@ -760,29 +756,18 @@ def _reencode_pool_image(path: str, target_w: int = None, target_h: int = None, 
 def _rand_jpeg_via_pil(width=None, height=None, quality=None):
     """
     Fallback generate synthetic meter foto jika pool kosong.
-    Sekarang generate 720x720 square baseline (match server).
+    STRICT 720x720 square untuk semua tipe.
     """
     try:
         from PIL import Image, ImageDraw
     except ImportError:
         return None
 
-    # Default 720x720 square — anti bypass detection
-    if width is None or height is None:
-        tw, th = _get_target_dim_720()
-        width, height = tw, th
+    # STRICT 720x720 untuk semua tipe — tidak ada lagi outlier
+    width, height = 720, 720
+
     if quality is None:
         quality = random.randint(82, 93)
-
-    # Jika masih ada request dimensions lama (misal 800x600), override ke square
-    # kecuali sudah square realistic
-    if width != height:
-        # Force square 720x720 untuk konsistensi dengan app asli
-        if random.random() < 0.85:
-            width = height = 720
-        else:
-            # Portrait 720x960 — sesuai outlier real di server
-            width, height = 720, 960
 
     # Buat background mirip foto meter real (bukan gray noise flat)
     # Base: panel gelap dengan sedikit texture
@@ -872,8 +857,8 @@ def rand_jpeg_bytes(target_w: int = None, target_h: int = None, item_name: str =
     Returns:
         bytes JPEG valid
     """
-    if target_w is None or target_h is None:
-        target_w, target_h = _get_target_dim_720()
+    # STRICT 720x720 untuk semua tipe
+    target_w, target_h = 720, 720
 
     # Resolver per-item pool (manual vs pool) — content only, filename tetap humanizer
     pool_files, src_mode, folder_label, full_dir = _get_photo_pool_per_item(
@@ -888,30 +873,37 @@ def rand_jpeg_bytes(target_w: int = None, target_h: int = None, item_name: str =
     _LAST_META["data_type"] = data_type or ""
 
     if pool_files:
-        # Coba 5 kali dari pool (random pick per input)
+        # Coba 5 kali dari pool (random pick per input) — strict 720x720
         for _ in range(5):
             p = random.choice(pool_files)
             # variant_mode: auto = random 40% asli, 20% blur_ringan, 10% blur_berat, 15% kabur_glare, 15% noisy_gelap
-            enc = _reencode_pool_image(p, target_w, target_h, variant_mode=variant_mode or "auto")
+            enc = _reencode_pool_image(p, 720, 720, variant_mode=variant_mode or "auto")
             if enc and enc.startswith(b"\xff\xd8") and len(enc) >= 8000:
-                # Validasi dimensi
+                # Validasi dimensi strict 720x720
                 try:
                     from PIL import Image
                     im = Image.open(io.BytesIO(enc))
                     w, h = im.size
-                    # Harus 720x720 atau 720x960 atau 1080x1080 (dalam range TARGET_DIMS)
-                    if (w, h) in [(720, 720), (720, 960), (960, 720), (1080, 1080), (1080, 1440), (1440, 1080), (1440, 1440)]:
+                    # STRICT: harus 720x720
+                    if (w, h) == (720, 720):
                         if 10000 <= len(enc) <= 100000:
                             return enc
-                    # Tetap return jika valid JPEG meski dimensi tidak exact (fallback toleran)
-                    if len(enc) >= 10000:
-                        return enc
+                    # Jika bukan 720x720, coba re-encode lagi (jangan return yang non-720)
                 except:
-                    # Jika PIL gagal cek, tetap return jika size ok
+                    # Jika PIL gagal cek, tetap return jika size ok (akan di-validasi lagi downstream)
                     if len(enc) >= 8000:
-                        return enc
+                        # Cek lagi dimensi, kalau gagal PIL tapi bytes valid, tetap coba return
+                        # tapi next iteration akan coba lagi yang strict
+                        try:
+                            from PIL import Image
+                            im = Image.open(io.BytesIO(enc))
+                            if im.size == (720, 720):
+                                return enc
+                        except:
+                            if len(enc) >= 10000:
+                                return enc
 
-        # Fallback: baca raw dan crop paksa ke 720x720
+        # Fallback: baca raw dan crop paksa ke 720x720 strict
         try:
             from PIL import Image
             raw_path = random.choice(pool_files)
@@ -922,7 +914,7 @@ def rand_jpeg_bytes(target_w: int = None, target_h: int = None, item_name: str =
                 if im.mode != 'RGB':
                     im = im.convert('RGB')
                 im = _crop_center_square(im)
-                im = im.resize((target_w, target_h), Image.LANCZOS)
+                im = im.resize((720, 720), Image.LANCZOS)
                 # variant untuk fallback raw juga
                 try:
                     im, _ = _apply_variant_transform(im, mode=variant_mode or "auto")
@@ -940,19 +932,19 @@ def rand_jpeg_bytes(target_w: int = None, target_h: int = None, item_name: str =
         except Exception:
             pass
 
-    # Fallback synthetic 720x720
+    # Fallback synthetic strict 720x720
     for _ in range(5):
-        gen = _rand_jpeg_via_pil(target_w, target_h)
+        gen = _rand_jpeg_via_pil(720, 720)
         if gen and gen.startswith(b"\xff\xd8") and len(gen) >= 8000:
             _LAST_META["source_mode"] = "synthetic"
             _LAST_META["variant"] = "synthetic"
             _LAST_META["bytes"] = len(gen)
             return gen
 
-    # Last fallback: minimal 720x720 valid JPEG (1x1 dummy di-expand ke 720x720 gray)
+    # Last fallback: minimal 720x720 valid JPEG (gray) — strict 720x720
     try:
         from PIL import Image
-        img = Image.new('RGB', (target_w, target_h), (random.randint(30, 60), random.randint(30, 60), random.randint(35, 65)))
+        img = Image.new('RGB', (720, 720), (random.randint(30, 60), random.randint(30, 60), random.randint(35, 65)))
         out = io.BytesIO()
         img.save(out, format='JPEG', quality=85, optimize=True, exif=b'', progressive=False)
         data = out.getvalue()
@@ -1011,8 +1003,8 @@ def rand_jpeg_pair(target_w: int = None, target_h: int = None, item_name: str = 
     - Jika pool, 1 file untuk semua tapi tetap distinct via variant
     - Pastikan baseline, no progressive, no COM, no EXIF (audit server)
     """
-    if target_w is None or target_h is None:
-        target_w, target_h = _get_target_dim_720()
+    # STRICT 720x720 untuk semua tipe (beban penyulang, beban trafo, tegangan HV+MV)
+    target_w, target_h = 720, 720
 
     for attempt in range(15):
         # Untuk tegangan, paksa variant berbeda agar tidak dianggap duplicate oleh server

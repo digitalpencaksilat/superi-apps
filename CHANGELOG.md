@@ -5,6 +5,56 @@ Semua perubahan penting pada project ini akan didokumentasikan di file ini.
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0),
 dan project ini menggunakan [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.3.1] — 2026-07-17
+
+### Fixed
+
+- **Foto pool beban penyulang nomor 4 tidak 720×720 — sekarang strict 720×720 untuk semua tipe (HIGH).**
+  - Root cause: `_get_target_dim_720()` random weighted 85% 720×720 + 10.5% 720×960 + 4.5% 1080×1080 untuk meniru outlier server (95% 720×720 / 5% 720×960). Semua caller `rand_jpeg_bytes()` tanpa explicit `target_w/h` jadi 1 dari ~7 upload kena 720×960/1080×1080, nomor 4 kebetulan kena.
+  - Plus fallback 640×640 kalau size >75KB (`_reencode_pool_image:703-713`) dan crop square hanya jika target square (`591-593`) → aspect stretch.
+  - Fix `superi_humanizer.py`:
+    - `_TARGET_DIMS` jadi `[(720,720,100)]` single, `_get_target_dim_720()` & `_pick_target_dim()` always return `(720,720)` 100% — tidak ada lagi outlier.
+    - `_reencode_pool_image()`: strict `target_w=720,target_h=720`, selalu `_crop_center_square()` (1200×1600 → 1200×1200 crop ±5%) + `resize(720,720, LANCZOS)` tanpa cek `if target_w==target_h`.
+    - Hapus branch 640×640, ganti loop quality 93→50 tetap 720×720 + fallback blur ringan `GaussianBlur(0.6)` quality 65 jika masih >75KB + last resort quality 50 tetap 720×720.
+    - Exception path fallback juga strict 720×720.
+    - `_rand_jpeg_via_pil()` force `width=height=720`, hapus branch random 720×960.
+    - `rand_jpeg_bytes()` default 720×720, validasi strict `== (720,720)` bukan whitelist 7 dimensi, synthetic & gray fallback 720×720.
+    - `rand_jpeg_pair()` strict 720×720 untuk HV+MV pair tegangan.
+  - Fix defensive explicit di uploader:
+    - `superi_app.py:_get_jpeg_bytes()` & `api_post_multipart()` HV/MV & beban explicit `target_w=720,target_h=720`.
+    - `superi_input.py:_get_jpeg_bytes()` & `superi_auto.py:_get_jpeg_single/pair()` explicit 720×720.
+    - `superi_web.py` delegasi ke shared uploader sudah 720×720 via fix di `superi_app`.
+  - Hasil: `photo/pool/1.jpeg` 1200×1600 → crop 1200×1200 ±5% → 720×720 LANCZOS, 30/30 sample termasuk nomor 4 `53943B` strict 720×720, beban-trafo 10× OK, tegangan HV+MV pair 10× distinct SHA all 720×720, size 19-66KB baseline no EXIF/COM/progressive.
+  - Tests: `test_humanizer.py` update `test_jpeg_bytes_720x720_dimension` assert exact 720×720 20/20 (bukan dominant >=8/20) + baru `test_beban_penyulang_pool_strict_720` 20× penyulang termasuk nomor 4 regression + `test_all_types_pool_strict_720` 3 tipe + HV/MV pair. Total 100 passed (29 humanizer + 24 cli_render + 20 auto + 27 lainnya).
+
+- **Hardcoded `garduIndukId=222` di CLI & web — sekarang dinamis dari config (MEDIUM).**
+  - `superi_app.py:1089` `smart_suggest_value()` legacy masih hardcoded 222, bukan dari config. Kalau user ganti GI bukan 222 (misal GI lain), suggest di input manual single & batch per-item akan salah GI.
+  - Fix: tambah param `gi_id=None` default dari `load_config().get("gi_id",222)` di `smart_suggest_value()`, dan passing `gi_id=gi_id` dari `input_single()` & `batch_fill()`.
+  - `superi_web.py` 9 lokasi hardcoded `garduIndukId: 222` (dashboard 3×, refresh, smart-suggest, batch-pattern, batch-pattern-tegangan) → buat helper `_get_gi_id()` baca dari config fallback 222, ganti semua `222` → `_get_gi_id()`.
+  - Plus `learn_pattern(token, 222, ...)` → `_get_gi_id()`.
+
+- **Web batch per-periode tidak passing `item_name` → manual pool selalu fallback ke pool generic (MEDIUM).**
+  - `superi_web.py:api_batch_input()` mode `per-periode` loop `items` tidak kirim nama penyulang/trafo ke `api_post_multipart()`, jadi resolver foto manual per-item (`_get_photo_pool_per_item`) fallback ke pool generic walau config `photo_source=manual`.
+  - Fix: ambil `item_name = it.get("nama") or it.get("item_name")` per item dan `api_post_multipart(..., item_name=item_name)`. Sama untuk mode `per-item` ambil `item_name` dari `data.get("item_name")`.
+  - Hasil: kalau config manual, frontend perlu kirim `nama` di JSON items (sudah disiapkan di backend), foto akan sesuai per-item + varian blur/kabur/asli.
+
+### Changed
+
+- `superi_humanizer.py`: header comment `STRICT 720x720 SQUARE UNTUK SEMUA TIPE`, `_TARGET_DIMS` single 720×720, docstring update strict.
+- `superi_web.py`: tambah `_get_gi_id()` helper, batch input passing `item_name`.
+- `superi_app.py`: `smart_suggest_value` signature tambah `gi_id` param.
+- `tests/test_humanizer.py`: strict assert + 2 test baru, total 29 humanizer tests (dari 27) → 100 total tests passed.
+
+### Verified
+
+- Pool strict: 30/30 720×720 termasuk nomor 4 beban penyulang (bug report user) `53943B`.
+- Beban trafo 10× 720×720, tegangan HV+MV 10× distinct SHA all 720×720, size 19-66KB.
+- Anti bypass: no progressive `FFC2`, no COM `FFFE`, no EXIF, baseline JPEG.
+- `photo/pool/1.jpeg` 1200×1600 → crop square ±5% → 720×720 LANCZOS OK.
+- Config `gi_id` dinamis: ganti GI lain tidak hardcoded lagi di web & CLI smart suggest.
+- Web batch per-periode manual pool: resolver per-item sekarang bisa match folder `photo/manual/{type}/{ITEM}/`.
+- 100 tests passed (29 humanizer + 20 cli_render + 20 auto + 6 multipart + lainnya).
+
 ## [1.3.0] — 2026-07-17
 
 ### Added

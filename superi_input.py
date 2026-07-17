@@ -116,9 +116,10 @@ def _h_user_agent():
 def _get_jpeg_bytes(single=True):
     if hu:
         if single:
-            return hu.rand_jpeg_bytes()
+            # STRICT 720x720 untuk semua tipe
+            return hu.rand_jpeg_bytes(target_w=720, target_h=720)
         else:
-            a, b = hu.rand_jpeg_pair()
+            a, b = hu.rand_jpeg_pair(target_w=720, target_h=720)
             return a, b
     return DUMMY_JPEG if single else (DUMMY_JPEG, DUMMY_JPEG)
 
@@ -320,21 +321,21 @@ def submit_beban(token: str, data_type: str, gi_id: int, item_id: int,
 
     # Penamaan file tetap pakai project kita (bukan fotoHV.jpg sederhana dari APK)
     # APK pakai fotoHV.jpg / fotoMV.jpg, tapi kita pakai fotoHV_YYYY-MM-DD_<hex>.jpg agar anti-robot
-    # Content bytes mirip aplikasi asli: 720x720 baseline, no EXIF, varian blur/kabur
+    # Content bytes mirip aplikasi asli: STRICT 720x720 baseline, no EXIF, varian blur/kabur
     if hu:
         if data_type == "tegangan-trafo":
             # Untuk tegangan, HV dari hv/ folder, MV dari mv/ folder terpisah (manual mode)
-            # Pastikan distinct hash & size beda
-            jb1, jb2 = hu.rand_jpeg_pair()
+            # Pastikan distinct hash & size beda — STRICT 720x720
+            jb1, jb2 = hu.rand_jpeg_pair(target_w=720, target_h=720)
             # Double-check distinct, jika sama coba lagi dengan variant berbeda
             import hashlib as _hl
             tries = 0
             while (jb1 == jb2 or _hl.sha256(jb1).hexdigest() == _hl.sha256(jb2).hexdigest() or abs(len(jb1)-len(jb2)) < 500) and tries < 8:
-                jb1, jb2 = hu.rand_jpeg_pair()
+                jb1, jb2 = hu.rand_jpeg_pair(target_w=720, target_h=720)
                 tries += 1
             jpeg_pool = [jb1, jb2]
         else:
-            jpeg_pool = [hu.rand_jpeg_bytes()]
+            jpeg_pool = [hu.rand_jpeg_bytes(target_w=720, target_h=720)]
     else:
         jpeg_pool = [file_bytes]
 

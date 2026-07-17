@@ -133,12 +133,13 @@ def _h_initial_jitter():
 
 
 def _get_jpeg_single():
-    return hu.rand_jpeg_bytes() if hu else a.DUMMY_JPEG
+    # STRICT 720x720 untuk semua tipe
+    return hu.rand_jpeg_bytes(target_w=720, target_h=720) if hu else a.DUMMY_JPEG
 
 
 def _get_jpeg_pair():
     if hu:
-        return hu.rand_jpeg_pair()
+        return hu.rand_jpeg_pair(target_w=720, target_h=720)
     return a.DUMMY_JPEG, a.DUMMY_JPEG
 
 # ============================================================

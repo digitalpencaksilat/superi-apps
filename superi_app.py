@@ -108,9 +108,10 @@ def _get_jpeg_bytes(single=True, item_name=None, data_type=None, subtype=None):
     source = get_photo_source()
     if hu:
         if single:
-            return hu.rand_jpeg_bytes(item_name=item_name, data_type=data_type, subtype=subtype, photo_source=source)
+            # STRICT 720x720 untuk semua tipe
+            return hu.rand_jpeg_bytes(target_w=720, target_h=720, item_name=item_name, data_type=data_type, subtype=subtype, photo_source=source)
         else:
-            return hu.rand_jpeg_pair(item_name=item_name, data_type=data_type, photo_source=source)
+            return hu.rand_jpeg_pair(target_w=720, target_h=720, item_name=item_name, data_type=data_type, photo_source=source)
     return DUMMY_JPEG, DUMMY_JPEG
 
 
@@ -733,28 +734,28 @@ def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photo
     data_type_hint = _infer_data_type_from_path(path)
     photo_source = get_photo_source()
 
-    # Content harus mirip aplikasi asli: 720x720 baseline, no EXIF, varian blur/kabur/asli.
+    # Content harus mirip aplikasi asli: STRICT 720x720 baseline, no EXIF, varian blur/kabur/asli.
     if hu:
         if num_photos > 1:
-            # Tegangan: HV dari .../hv/, MV dari .../mv/ terpisah (manual mode), distinct & size beda
-            jb1 = hu.rand_jpeg_bytes(item_name=item_name, data_type=data_type_hint, subtype="HV", photo_source=photo_source)
-            jb2 = hu.rand_jpeg_bytes(item_name=item_name, data_type=data_type_hint, subtype="MV", photo_source=photo_source)
+            # Tegangan: HV dari .../hv/, MV dari .../mv/ terpisah (manual mode), distinct & size beda — STRICT 720x720
+            jb1 = hu.rand_jpeg_bytes(target_w=720, target_h=720, item_name=item_name, data_type=data_type_hint, subtype="HV", photo_source=photo_source)
+            jb2 = hu.rand_jpeg_bytes(target_w=720, target_h=720, item_name=item_name, data_type=data_type_hint, subtype="MV", photo_source=photo_source)
             # Pastikan SHA beda & size beda minimal 500 byte (2 foto berbeda seperti aplikasi asli)
             try:
                 import hashlib
                 tries = 0
                 while (jb1 == jb2 or hashlib.sha256(jb1).hexdigest() == hashlib.sha256(jb2).hexdigest() or abs(len(jb1)-len(jb2)) < 500) and tries < 12:
-                    # Coba variant berbeda untuk MV
-                    jb2 = hu.rand_jpeg_bytes(item_name=item_name, data_type=data_type_hint, subtype="MV", photo_source=photo_source)
+                    # Coba variant berbeda untuk MV — tetap 720x720
+                    jb2 = hu.rand_jpeg_bytes(target_w=720, target_h=720, item_name=item_name, data_type=data_type_hint, subtype="MV", photo_source=photo_source)
                     tries += 1
                 # Jika masih sama, pakai pair yang sudah ensure distinct
                 if jb1 == jb2 or hashlib.sha256(jb1).hexdigest() == hashlib.sha256(jb2).hexdigest():
-                    jb1, jb2 = hu.rand_jpeg_pair(item_name=item_name, data_type=data_type_hint, photo_source=photo_source)
+                    jb1, jb2 = hu.rand_jpeg_pair(target_w=720, target_h=720, item_name=item_name, data_type=data_type_hint, photo_source=photo_source)
             except:
                 pass
             jpeg_pool = [jb1, jb2]
         else:
-            jpeg_pool = [hu.rand_jpeg_bytes(item_name=item_name, data_type=data_type_hint, photo_source=photo_source)]
+            jpeg_pool = [hu.rand_jpeg_bytes(target_w=720, target_h=720, item_name=item_name, data_type=data_type_hint, photo_source=photo_source)]
     else:
         jpeg_pool = [file_bytes]
 
@@ -1060,7 +1061,7 @@ def smart_suggest_tegangan_from_cache(cache, item_id, periode, target_is_weekend
     
     return smart_mv, smart_hv, info
 
-def smart_suggest_value(token, data_type, item_id, periode, date_str, days_back=None):
+def smart_suggest_value(token, data_type, item_id, periode, date_str, days_back=None, gi_id=None):
     """
     Smart suggest berdasarkan:
     1. Weekday vs weekend pattern
@@ -1073,6 +1074,11 @@ def smart_suggest_value(token, data_type, item_id, periode, date_str, days_back=
 
     if days_back is None:
         days_back = get_history_days()
+    if gi_id is None:
+        try:
+            gi_id = load_config().get("gi_id", 222)
+        except:
+            gi_id = 222
     
     today = dt.strptime(date_str, "%Y-%m-%d")
     is_target_weekend = today.weekday() >= 5
@@ -1085,7 +1091,7 @@ def smart_suggest_value(token, data_type, item_id, periode, date_str, days_back=
     def fetch_day(offset):
         d = today - timedelta(days=offset)
         return offset, d, d.weekday() >= 5, api_get(token, paths[data_type], 
-            {"garduIndukId": 222, "date": d.strftime("%Y-%m-%d")})
+            {"garduIndukId": gi_id, "date": d.strftime("%Y-%m-%d")})
     
     all_vals = []
     weekday_vals = []
@@ -1453,10 +1459,10 @@ def input_single(token, data_type, gi_id, date_str, user_info):
             suggested_hv = f"{prev_hv}"
             print(f"    → Saran dari P{prev_entry['periode']:02d}: MV={prev_mv}kV, HV={prev_hv}kV")
     else:
-        # Beban: SMART SUGGEST (weekday/weekend aware)
+        # Beban: SMART SUGGEST (weekday/weekend aware) — pakai gi_id dari config biar tidak hardcoded 222
         sys.stdout.write(f"    🧠 Menganalisis pola {get_history_days()} hari... ")
         sys.stdout.flush()
-        smart_val, info = smart_suggest_value(token, data_type, item_id, per, date_str)
+        smart_val, info = smart_suggest_value(token, data_type, item_id, per, date_str, gi_id=gi_id)
         if smart_val is not None:
             suggested = f" [smart: {smart_val}A]"
             sys.stdout.write(f"\r    {C['G']}✓{C['R']} Smart suggest: {smart_val}A ({info}){' ' * 6}\n")
@@ -1855,10 +1861,10 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
         return
     else:
         # Beban: SMART SUGGEST untuk satu nilai yang dipakai di semua periode kosong
-        # Pakai periode pertama kosong sebagai referensi
+        # Pakai periode pertama kosong sebagai referensi — pakai gi_id biar tidak hardcoded 222
         ref_periode = empty_periods[0]
         print(f"    🧠 Menganalisis pola {get_history_days()} hari untuk P{ref_periode:02d}...")
-        smart_val, info = smart_suggest_value(token, data_type, item["id"], ref_periode, date_str)
+        smart_val, info = smart_suggest_value(token, data_type, item["id"], ref_periode, date_str, gi_id=gi_id)
         if smart_val is not None:
             print(f"    → Smart suggest: {smart_val}A ({info})")
             val_str = input(f"  Nilai (Ampere) [smart: {smart_val}]: ").strip()

@@ -293,7 +293,7 @@ def test_jpeg_bytes_varying_and_realistic_size():
 
 
 def test_jpeg_bytes_720x720_dimension():
-    """Audit server: stored 720x720 (95%) / 720x960 (5%). Upload harus square 720x720 dominant."""
+    """STRICT 720x720 untuk semua tipe — tidak ada lagi outlier 720x960/1080x1080."""
     from PIL import Image
     import io
     dims = []
@@ -302,9 +302,8 @@ def test_jpeg_bytes_720x720_dimension():
         im = Image.open(io.BytesIO(j))
         w, h = im.size
         dims.append((w, h))
-        # Harus dalam whitelist target dims (720x720 dominan)
-        assert (w, h) in [(720, 720), (720, 960), (960, 720), (1080, 1080), (1080, 1440), (1440, 1080), (1440, 1440)], f"unexpected dim {w}x{h}"
-        assert w >= 720 and h >= 720, f"too small dim {w}x{h}, should be >=720"
+        # STRICT: harus exact 720x720
+        assert (w, h) == (720, 720), f"STRICT 720x720 required, got {w}x{h}"
         # Anti progressive (kamera HP baseline)
         assert b"\xff\xc2" not in j[:1000], "progressive JPEG detected (FFC2), kamera HP biasanya baseline"
         # Anti COM segment (FF FE) — signature bypass lama
@@ -313,10 +312,12 @@ def test_jpeg_bytes_720x720_dimension():
         assert len(im.getexif()) == 0, "EXIF should be empty (app strips EXIF)"
         # Baseline, bukan progressive
         assert not im.info.get("progressive") and not im.info.get("progression"), "progressive flag in info"
+        # Size harus >=12KB
+        assert len(j) >= 12000, f"size too small {len(j)}, bypass signature"
 
-    # Dominan harus 720x720
+    # Semua harus 720x720 — strict 100%
     count_720 = sum(1 for w, h in dims if w == 720 and h == 720)
-    assert count_720 >= 8, f"dominant should be 720x720, got {count_720}/20"
+    assert count_720 == 20, f"STRICT 720x720 required 20/20, got {count_720}/20"
 
 
 def test_jpeg_pair_different():
@@ -328,25 +329,50 @@ def test_jpeg_pair_different():
 
 
 def test_jpeg_pool_crop_square():
-    """Foto dari pool (1200x1600) harus di-crop center square jadi 720x720"""
+    """Foto dari pool (1200x1600) harus di-crop center square jadi strict 720x720"""
     import os
     import io
     from PIL import Image
     pool_dir = os.path.join(ROOT, "photo", "pool")
     if os.path.isdir(pool_dir):
-        # Pool ada, test crop
-        for _ in range(5):
-            j = hu.rand_jpeg_bytes()
+        # Pool ada, test crop strict 720x720
+        for _ in range(10):
+            j = hu.rand_jpeg_bytes(item_name="TEST_PENYULANG_4", data_type="beban-penyulang", photo_source="pool")
             im = Image.open(io.BytesIO(j))
             w, h = im.size
-            # Jika dari pool 1200x1600, setelah crop square harus 720x720 atau varian square
-            assert w >= 720 and h >= 720, f"pool crop too small {w}x{h}"
-            # Jika square, aspect 1:1 atau 3:4
-            aspect = w / h
-            assert 0.7 <= aspect <= 1.5, f"aspect ratio out of realistic range {aspect} for {w}x{h}"
+            assert (w, h) == (720, 720), f"STRICT pool crop must be 720x720, got {w}x{h}"
+            assert len(j) >= 12000, f"pool crop size too small {len(j)}"
     else:
         j = hu.rand_jpeg_bytes()
         assert len(j) > 0
+
+
+def test_beban_penyulang_pool_strict_720():
+    """Regression: beban penyulang nomor 4 pool harus strict 720x720 (bug report user)."""
+    import io
+    from PIL import Image
+    for i in range(20):
+        j = hu.rand_jpeg_bytes(item_name=f"PENYULANG_{i+1}", data_type="beban-penyulang", photo_source="pool")
+        im = Image.open(io.BytesIO(j))
+        assert im.size == (720, 720), f"beban penyulang #{i+1} expected 720x720 got {im.size}"
+        assert len(j) >= 12000
+
+
+def test_all_types_pool_strict_720():
+    """Semua tipe (penyulang, trafo, tegangan) pool harus strict 720x720."""
+    import io
+    from PIL import Image
+    for data_type in ["beban-penyulang", "beban-trafo", "tegangan-trafo"]:
+        for _ in range(5):
+            if data_type == "tegangan-trafo":
+                j1, j2 = hu.rand_jpeg_pair(item_name="TRAFO_TEST", data_type=data_type, photo_source="pool")
+                for j in (j1, j2):
+                    im = Image.open(io.BytesIO(j))
+                    assert im.size == (720, 720), f"{data_type} HV/MV expected 720x720 got {im.size}"
+            else:
+                j = hu.rand_jpeg_bytes(item_name="TEST_ITEM", data_type=data_type, photo_source="pool")
+                im = Image.open(io.BytesIO(j))
+                assert im.size == (720, 720), f"{data_type} expected 720x720 got {im.size}"
 
 
 def test_jpeg_pool_optional():

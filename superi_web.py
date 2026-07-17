@@ -553,13 +553,13 @@ def dashboard():
     
     # Fetch data beban penyulang
     penyulang_data = api_get(token, "/gama/opgi-20kv/operator-gi/beban-penyulang", 
-        {"garduIndukId": 222, "date": date_str})
+        {"garduIndukId": _get_gi_id(), "date": date_str})
     
     trafo_data = api_get(token, "/gama/opgi-20kv/operator-gi/beban-trafo",
-        {"garduIndukId": 222, "date": date_str})
+        {"garduIndukId": _get_gi_id(), "date": date_str})
     
     tegangan_data = api_get(token, "/gama/opgi-20kv/operator-gi/tegangan-trafo",
-        {"garduIndukId": 222, "date": date_str})
+        {"garduIndukId": _get_gi_id(), "date": date_str})
     
     return render_template("dashboard.html", 
         user=user,
@@ -670,7 +670,7 @@ def api_refresh():
         "tegangan": "/gama/opgi-20kv/operator-gi/tegangan-trafo",
     }
     
-    result = api_get(token, paths[data_type], {"garduIndukId": 222, "date": date_str})
+    result = api_get(token, paths[data_type], {"garduIndukId": _get_gi_id(), "date": date_str})
     return jsonify(result.get("data", {}).get("items", []))
 
 @app.route("/api/data/pattern", methods=["GET"])
@@ -682,7 +682,7 @@ def api_pattern():
     item_id = request.args.get("item_id", type=int)
     days = request.args.get("days", 7, type=int)
     
-    pattern = learn_pattern(token, 222, data_type, item_id, days)
+    pattern = learn_pattern(token, _get_gi_id(), data_type, item_id, days)
     return jsonify({"success": True, "pattern": pattern})
 
 @app.route("/api/data/batch-input", methods=["POST"])
@@ -718,6 +718,7 @@ def api_batch_input():
 
         for it in items:
             item_id = it.get("item_id")
+            item_name = it.get("nama") or it.get("item_name") or it.get("name")  # untuk resolver foto manual per-item
             
             if data_type == "tegangan-trafo":
                 endpoint = "/gama/opgi-20kv/operator-gi/tegangan-trafo/input"
@@ -762,7 +763,9 @@ def api_batch_input():
                 body_data["beban"] = it.get("value")
                 body_data["foto"] = _h_foto_dict(date_str, periode, durasi, data_type)
 
-            status, result = api_post_multipart(token, endpoint, body_data, DUMMY_JPEG, file_field, num_photos)
+            # Pass item_name agar resolver foto manual per-item bisa match (fix bug pool generic terus)
+            # Kalau tidak ada nama, tetap jalan pakai pool generic
+            status, result = api_post_multipart(token, endpoint, body_data, DUMMY_JPEG, file_field, num_photos, item_name=item_name)
             if result.get("success"):
                 results.append({"item_id": item_id, "success": True, "id": result["data"].get("id")})
             else:
@@ -770,6 +773,7 @@ def api_batch_input():
 
     else:
         item_id = data.get("item_id")
+        item_name = data.get("item_name") or data.get("nama") or data.get("name")  # untuk resolver foto manual per-item
         periods = data.get("periods")
 
         if not periods or not isinstance(periods, list):
@@ -821,7 +825,7 @@ def api_batch_input():
                 body_data["beban"] = p.get("value")
                 body_data["foto"] = _h_foto_dict(date_str, periodo, durasi, data_type)
 
-            status, result = api_post_multipart(token, endpoint, body_data, DUMMY_JPEG, file_field, num_photos)
+            status, result = api_post_multipart(token, endpoint, body_data, DUMMY_JPEG, file_field, num_photos, item_name=item_name)
             if result.get("success"):
                 results.append({"periode": periodo, "success": True, "id": result["data"].get("id")})
             else:
@@ -868,7 +872,7 @@ def api_smart_suggest():
         date_key = d.strftime("%Y-%m-%d")
         d_is_weekend = d.weekday() >= 5
         
-        result = api_get(token, path, {"garduIndukId": 222, "date": date_key})
+        result = api_get(token, path, {"garduIndukId": _get_gi_id(), "date": date_key})
         items = result.get("data", {}).get("items", [])
         
         for it in items:
@@ -902,7 +906,7 @@ def api_smart_suggest():
         
         def fetch_prev_day(offset):
             d = today - timedelta(days=offset)
-            return api_get(token, path, {"garduIndukId": 222, "date": d.strftime("%Y-%m-%d")})
+            return api_get(token, path, {"garduIndukId": _get_gi_id(), "date": d.strftime("%Y-%m-%d")})
         
         with ThreadPoolExecutor(max_workers=min(hist_days, 8)) as executor:
             results = list(executor.map(fetch_prev_day, range(1, hist_days + 1)))
@@ -973,7 +977,7 @@ def api_batch_pattern():
     def fetch_day(offset):
         d = today - timedelta(days=offset)
         return offset, d, d.weekday() >= 5, api_get(token, paths[data_type], 
-            {"garduIndukId": 222, "date": d.strftime("%Y-%m-%d")})
+            {"garduIndukId": _get_gi_id(), "date": d.strftime("%Y-%m-%d")})
     
     # Kumpulkan: semua, weekday, weekend (separate)
     item_patterns = defaultdict(lambda: {
@@ -1165,7 +1169,7 @@ def api_batch_pattern_tegangan():
 
     def fetch_day(offset):
         d = today - timedelta(days=offset)
-        return d.weekday() >= 5, api_get(token, path, {"garduIndukId": 222, "date": d.strftime("%Y-%m-%d")})
+        return d.weekday() >= 5, api_get(token, path, {"garduIndukId": _get_gi_id(), "date": d.strftime("%Y-%m-%d")})
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         results_list = list(executor.map(fetch_day, range(1, days + 1)))
@@ -1390,6 +1394,14 @@ def _load_config():
             return json.load(f)
     return {}
 
+def _get_gi_id() -> int:
+    """Ambil gi_id dari config, fallback 222 biar tidak hardcoded di semua tempat."""
+    try:
+        cfg = _load_config()
+        return int(cfg.get("gi_id", 222))
+    except Exception:
+        return 222
+
 def _save_config(cfg):
     with open(CONFIG_FILE, "w") as f:
         json.dump(cfg, f, indent=2)
@@ -1590,7 +1602,7 @@ def api_dry_run():
 
     def fetch_day(offset):
         d = today - timedelta(days=offset)
-        return d.weekday() >= 5, api_get(token, path, {"garduIndukId": 222, "date": d.strftime("%Y-%m-%d")})
+        return d.weekday() >= 5, api_get(token, path, {"garduIndukId": _get_gi_id(), "date": d.strftime("%Y-%m-%d")})
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         results = list(executor.map(fetch_day, range(1, _cli.get_history_days() + 1)))
