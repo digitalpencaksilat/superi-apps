@@ -163,6 +163,70 @@ Dashboard lokal dengan fitur:
 superi cli
 ```
 
+CLI interaktif menggunakan Textual + Rich dalam mode fullscreen:
+
+- Border kuning mengelilingi seluruh aplikasi dan mengikuti resize terminal
+- Panel terpisah untuk Lihat Data, Input Manual, Batch per Item, dan Batch per Jam
+- Pengaturan dibagi lagi menjadi panel Akun & Sesi, Operasional, serta Portal & Aplikasi
+- Area konten dapat di-scroll tanpa menggeser header maupun input
+- Input area selalu berada di bawah untuk menu, angka, konfirmasi, dan password
+- Layout dua kolom otomatis menjadi satu kolom pada terminal sempit
+- Auto Mode dan Sumber Foto memakai status card serta action card Textual native
+- Sync Portal memakai halaman native dengan kartu koneksi, konfigurasi, ringkasan, dan log
+- Menu Setup Kredensial manual memakai kartu status akun, keamanan, hasil, dan wizard input masked
+- Batch per Jam Penyulang, Trafo, dan Tegangan memakai satu halaman native responsif tanpa header ganda
+- Lihat Data Penyulang, Trafo, dan Tegangan memakai tabel native selebar viewport dengan breadcrumb tunggal
+- Input Manual Penyulang, Trafo, dan Tegangan memakai tabel item native full-width tanpa header ganda
+- Detail pool dan random photo test ditampilkan sebagai tabel; panduan memakai Markdown
+- Dry-run Auto, validasi foto, log, dan operasi scheduler tetap terlihat di viewport
+- Saat proses berjalan, kolom input diganti status terkunci agar tidak terlihat aktif
+
+LIVE Sync Portal selalu menjalankan dry-run preview terlebih dahulu. Setelah
+preview selesai tanpa error, CLI meminta konfirmasi sebelum menulis perubahan
+ke Portal APD. Hasil dan detail proses tetap terlihat sampai pengguna kembali.
+
+Pada Setup Kredensial, password lama tidak pernah dimuat kembali ke kolom input.
+Kosongkan field untuk mempertahankan nilai yang sudah tersimpan; perubahan baru
+ditulis setelah konfirmasi akhir. Mengubah akun SUPER-I akan membuang sesi aktif
+dan memerlukan login ulang, sedangkan pengaturan Auto, Foto, dan Scheduler tetap.
+
+Halaman Batch per Jam menampilkan status 24 periode, tabel Smart Suggest, editor
+nilai bertahap, progres input, ringkasan hasil, dan log dalam satu viewport. Hasil
+batch yang berhasil dapat diteruskan ke halaman Sync Portal dengan jenis data,
+tanggal, dan jam yang sama. Mode `--classic` tetap memakai workflow CLI lama.
+
+Halaman Input Manual menampilkan seluruh item dalam tabel selebar viewport,
+termasuk status CB, jumlah periode terisi, strip 24 jam, dan periode kosong.
+Setelah item dipilih, breadcrumb tetap menjadi satu-satunya header; pemilihan
+periode, Smart Suggest, nilai, foto, konfirmasi, dan upload memakai logic yang sama.
+
+Saat memasang scheduler, CLI menampilkan preview jam dan menit acak terlebih
+dahulu. Jadwal yang dipasang setelah konfirmasi menggunakan plan preview yang
+sama persis, baik untuk cron maupun Windows Task Scheduler.
+
+Shortcut utama:
+
+| Tombol | Aksi |
+|---|---|
+| `Enter` | Kirim input / pilih menu |
+| `Esc` | Batal atau kembali |
+| `Page Up` / `Page Down` | Scroll konten |
+| `F1` | Tampilkan bantuan |
+| `Ctrl+L` | Gambar ulang tampilan |
+| `Ctrl+Q` | Keluar dan pulihkan terminal |
+
+Gunakan tampilan Rich klasik jika terminal tidak mendukung fullscreen:
+
+```bash
+superi cli --classic
+# atau
+SUPERI_CLASSIC_UI=1 superi cli
+```
+
+Fullscreen hanya aktif untuk CLI interaktif dengan stdin dan stdout TTY. Auto
+mode, cron, Task Scheduler, web, pipe, dan perintah scripting tetap memakai
+output terminal biasa.
+
 ### 📊 `superi input` — Scripting Mode
 
 ```bash
@@ -209,6 +273,9 @@ superi input --nip <NIP> --pass <PASSWORD> --list-penyulang --gi 222
 superi-apps/
 ├── superi_sync.py              # 🔄 Sync engine (SUPER-I → Portal APD)
 ├── superi_app.py               # 💻 CLI interaktif
+├── superi_tui.py               # 🖥️ Fullscreen Textual shell + sticky input
+├── superi_batch.py             # ⚡ Service Batch per Jam untuk native TUI
+├── superi_console.py           # 🎨 Rich console/theme dan prompt backend
 ├── superi_web.py               # 🌐 Web dashboard (Flask)
 ├── superi_input.py             # 📊 Scripting mode (input via API)
 ├── templates/                  # HTML templates untuk web
@@ -286,7 +353,7 @@ export PORTAL_PASSWORD=<PASSWORD>
 
 Project ini menggunakan [Semantic Versioning](https://semver.org/lang/id/).
 
-**Versi saat ini:** `1.3.0`
+**Versi saat ini:** `1.4.0`
 
 ```bash
 superi sync --version    # cek versi

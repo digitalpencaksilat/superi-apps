@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-SUPER-I APP → Portal PLN Sync Tool
-====================================
+SUPER-I APP → Portal PLN Sync Tool (Rich Edition - Tema Kuning)
+=================================================================
 Otomatis fetch data dari SUPER-I APP API lalu sync ke Portal PLN APD Jakarta.
 
 Usage:
-  superi sync                    # Menu interaktif
+  superi sync                    # Menu interaktif (via superi_app)
   superi sync --type all --jam 08       # Sync semua tipe jam 08
   superi sync --type penyulang --jam 09  # Sync beban penyulang jam 09
   superi sync --type trafo --jam 08-10   # Sync beban trafo jam 08 s/d 10
@@ -24,7 +24,7 @@ import urllib.error
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 
 # ============ PATHS ============
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +36,28 @@ try:
     import superi_humanizer as hu
 except Exception:
     hu = None
+
+# Rich console (tema kuning) - fallback jika tidak ada
+try:
+    import superi_console as sc
+    console = sc.console
+    RICH = True
+except ImportError:
+    try:
+        from rich.console import Console
+        from rich.theme import Theme
+        console = Console(theme=Theme({
+            "ok": "bold green",
+            "err": "bold red",
+            "warn": "bold yellow",
+            "info": "cyan",
+        }), highlight=False)
+        RICH = True
+        sc = None
+    except ImportError:
+        console = None
+        RICH = False
+        sc = None
 
 
 def _h_sleep(a=0.4, b=1.9):
@@ -49,8 +71,6 @@ def _h_shuffled(seq):
     return hu.shuffled(seq) if hu else list(seq)
 
 # ============ CONFIG LOADER ============
-# Credentials & config dibaca dari .superi_config.json (gitignored).
-# Gunakan .superi_config.example.json sebagai template.
 def _load_config():
     cfg_path = os.path.join(SCRIPT_DIR, ".superi_config.json")
     cfg = {}
@@ -59,7 +79,10 @@ def _load_config():
             with open(cfg_path, "r") as f:
                 cfg = json.load(f)
         except Exception as e:
-            print(f"  \033[91m✗ Gagal membaca .superi_config.json: {e}\033[0m")
+            if RICH and console:
+                console.print(f"  [err]✗ Gagal membaca .superi_config.json: {e}[/]")
+            else:
+                print(f"  \033[91m✗ Gagal membaca .superi_config.json: {e}\033[0m")
     return cfg
 
 _CFG = _load_config()
@@ -73,7 +96,7 @@ SUPER_I_API = "https://super-i-app.plnes.co.id/api"
 SUPER_I_AUTH = f"{SUPER_I_API}/auth/login-mobile"
 SUPER_I_NIP = _get("nip", "SUPERI_NIP")
 SUPER_I_PASS = _get("password", "SUPERI_PASSWORD")
-SUPER_I_GI_ID = int(_get("gi_id", "SUPERI_GI_ID", "222"))  # GI MANGGARAI di SUPER-I
+SUPER_I_GI_ID = int(_get("gi_id", "SUPERI_GI_ID", "222"))
 
 SUPER_I_ENDPOINTS = {
     "penyulang": "/gama/opgi-20kv/operator-gi/beban-penyulang",
@@ -85,7 +108,7 @@ SUPER_I_ENDPOINTS = {
 PORTAL_URL = _get("portal_url", "PORTAL_URL", "http://10.3.187.6/apdjakarta")
 PORTAL_USER = _get("portal_user", "PORTAL_USER")
 PORTAL_PASS = _get("portal_password", "PORTAL_PASSWORD")
-PORTAL_GI_ID = _get("portal_gi_id", "PORTAL_GI_ID", "143")  # GI MANGGARAI di Portal PLN
+PORTAL_GI_ID = _get("portal_gi_id", "PORTAL_GI_ID", "143")
 
 PORTAL_ENDPOINTS = {
     "penyulang": {
@@ -102,31 +125,168 @@ PORTAL_ENDPOINTS = {
     },
 }
 
-# ============ UI ============
-R = '\033[0m'; B = '\033[1m'; G = '\033[92m'; Y = '\033[93m'; RE = '\033[91m'; C = '\033[96m'; D = '\033[2m'; W = '\033[97m'
+# ============ UI (Rich themed yellow) ============
+def _rich_header(t):
+    if RICH and console and sc:
+        sc.header(t)
+    elif RICH and console:
+        from rich.panel import Panel
+        console.print(Panel(f"[bold bright_yellow]{t}[/]", border_style="bright_yellow", box=console.box if hasattr(console, 'box') else None))
+    else:
+        print(f"\n{'━'*60}\n  {t}\n{'━'*60}")
 
 def header(t):
-    bar = '━' * 60
-    print(f"\n{C}{bar}{R}\n  {B}{W}{t}{R}\n{C}{bar}{R}")
-def ok(t): print(f"  {G}✓ {t}{R}")
-def err(t): print(f"  {RE}✗ {t}{R}")
-def info(t): print(f"  {C}ℹ {t}{R}")
-def warn(t): print(f"  {Y}⚠ {t}{R}")
+    _rich_header(t)
 
-# ============ PROGRESS (compact, mirip superi cli) ============
-# Helper render (fmt_progress_bar, render_sync_summary) ada di cli_render.py (shared, pure-string).
+def ok(t):
+    if RICH and console and sc:
+        sc.ok(t)
+    elif RICH and console:
+        console.print(f"  [ok]✓ {t}[/]" if hasattr(console, 'print') else f"  ✓ {t}")
+    else:
+        print(f"  \033[92m✓ {t}\033[0m")
+
+def err(t):
+    if RICH and console and sc:
+        sc.err(t)
+    elif RICH and console:
+        console.print(f"  [err]✗ {t}[/]")
+    else:
+        print(f"  \033[91m✗ {t}\033[0m")
+
+def info(t):
+    if RICH and console and sc:
+        sc.info_msg(t)
+    elif RICH and console:
+        console.print(f"  [cyan]ℹ {t}[/]")
+    else:
+        print(f"  \033[96mℹ {t}\033[0m")
+
+def warn(t):
+    if RICH and console and sc:
+        sc.warn_msg(t)
+    elif RICH and console:
+        console.print(f"  [warn]⚠ {t}[/]")
+    else:
+        print(f"  \033[93m⚠ {t}\033[0m")
+
+# Progress helpers
+_progress_instance = None
+_progress_task = None
+
+def _get_progress():
+    """Lazy create progress dengan tema kuning."""
+    global _progress_instance
+    if not RICH or not console:
+        return None
+    if _progress_instance is not None:
+        return _progress_instance
+    if sc:
+        _progress_instance = sc.make_simple_progress()
+        if _progress_instance is None:
+            # fallback
+            from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, MofNCompleteColumn
+            _progress_instance = Progress(
+                TextColumn("[progress.description]{task.description}", style="white"),
+                BarColumn(bar_width=24, style="dim yellow", complete_style="bright_yellow", finished_style="green"),
+                TaskProgressColumn(style="bold bright_yellow"),
+                MofNCompleteColumn(),
+                TextColumn("[dim]{task.fields[extra]}[/]", justify="left"),
+                console=console,
+                transient=False,
+            )
+    else:
+        from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, MofNCompleteColumn
+        _progress_instance = Progress(
+            TextColumn("[progress.description]{task.description}", style="white"),
+            BarColumn(bar_width=24, style="dim yellow", complete_style="bright_yellow", finished_style="green"),
+            TaskProgressColumn(style="bold bright_yellow"),
+            MofNCompleteColumn(),
+            TextColumn("[dim]{task.fields[extra]}[/]", justify="left"),
+            console=console,
+            transient=False,
+        )
+    return _progress_instance
+
+# For compatibility: live_progress used inside do_sync loop
+_active_progress = None
+_active_task = None
+_total_cells_ref = 0
+
+def _start_live_progress(total, label="Sync"):
+    """Start Rich progress bar, returns task id."""
+    global _active_progress, _active_task, _total_cells_ref
+    if not RICH or not console:
+        return None
+    try:
+        prog = _get_progress()
+        if prog is None:
+            return None
+        # If already started, reuse; else start
+        if not hasattr(prog, '_started') or not prog._started:
+            prog.start()
+            prog._started = True
+        from rich.progress import Progress
+        _active_progress = prog
+        _total_cells_ref = total
+        _active_task = prog.add_task(f"[bold bright_yellow]{label}[/]", total=total, extra="")
+        return _active_task
+    except Exception:
+        return None
+
+def _update_live_progress(done, name=""):
+    """Update existing rich progress."""
+    global _active_progress, _active_task
+    if _active_progress is None or _active_task is None:
+        return
+    try:
+        nm = name[:18] if name else ""
+        _active_progress.update(_active_task, completed=done, extra=nm)
+    except Exception:
+        pass
+
+def _stop_live_progress():
+    """Stop rich progress."""
+    global _active_progress, _active_task
+    if _active_progress is None:
+        return
+    try:
+        _active_progress.stop()
+        _active_progress._started = False
+    except Exception:
+        pass
+    _active_progress = None
+    _active_task = None
 
 def live_progress(done, total, name=""):
-    """Progress bar 1-baris yang di-overwrite (\\r + erase-to-end \\033[K). Plain, tanpa ANSI — mirip cli fmt_progress_line."""
-    nm = name[:18].ljust(18) if name else ""
-    tail = f"  {nm}" if nm else ""
-    sys.stdout.write(f"\r  {cli_render.fmt_progress_bar(done, total)}{tail} ✓\033[K")
-    sys.stdout.flush()
+    """Progress bar - now menggunakan Rich jika tersedia, fallback ke old style."""
+    if RICH and _active_progress is not None:
+        _update_live_progress(done, name)
+    else:
+        # Fallback old style
+        nm = name[:18].ljust(18) if name else ""
+        tail = f"  {nm}" if nm else ""
+        sys.stdout.write(f"\r  {cli_render.fmt_progress_bar(done, total)}{tail} ✓\033[K")
+        sys.stdout.flush()
 
 def summary_box(label, ok_count, fail_count, skip_count, total):
-    """Box ringkasan sync — pakai cli_render.render_sync_summary, plain (tanpa ANSI, mirip cli render_summary_box)."""
-    for line in cli_render.render_sync_summary(label, ok_count, fail_count, skip_count, total):
-        print(line)
+    """Box ringkasan sync dengan tema kuning."""
+    if RICH and console:
+        if sc:
+            sc.sync_summary(label, ok_count, fail_count, skip_count, total)
+        else:
+            from rich.panel import Panel
+            inner = f"Ringkasan {label}: [bold green]✓ {ok_count} update[/]"
+            if fail_count:
+                inner += f"  [bold red]✗ {fail_count} gagal[/]"
+            if skip_count:
+                inner += f"  [dim]⊘ {skip_count} skip[/]"
+            inner += f"  [dim]({ok_count+fail_count}/{total})[/]"
+            border = "green" if fail_count == 0 else "bright_yellow"
+            console.print(Panel(inner, border_style=border, width=66))
+    else:
+        for line in cli_render.render_sync_summary(label, ok_count, fail_count, skip_count, total):
+            print(line)
 
 # ============ SUPER-I API CLIENT ============
 def superi_login() -> Optional[str]:
@@ -157,26 +317,22 @@ def superi_get(path: str, token: str, params: dict = None):
         return e.code, json.loads(e.read())
 
 def fetch_superi_data(data_type: str, token: str, date_str: str) -> Dict:
-    """
-    Fetch data dari SUPER-I API.
-    Returns: {nama: [val_per_jam_0..23], ...} untuk beban
-             {nama: {mv: [...], hv: [...]}, ...} untuk tegangan
-    """
+    """Fetch data dari SUPER-I API."""
     ep = SUPER_I_ENDPOINTS[data_type]
     status, data = superi_get(ep, token, params={"garduIndukId": SUPER_I_GI_ID, "date": date_str})
-    
+
     if status != 200:
         err(f"SUPER-I fetch failed: HTTP {status}")
         return {}
-    
+
     items = data.get("data", {}).get("items", [])
     result = {}
-    
+
     for item in items:
         nama = item.get("nama", "").strip()
         if not nama:
             continue
-        
+
         if data_type == "tegangan":
             entries = item.get("tegangan", [])
             mv = [None] * 24
@@ -195,7 +351,7 @@ def fetch_superi_data(data_type: str, token: str, date_str: str) -> Dict:
                 if 0 <= p < 24:
                     jams[p] = e.get("beban")
             result[nama] = jams
-    
+
     return result
 
 # ============ PORTAL PLN CLIENT ============
@@ -208,9 +364,9 @@ except ImportError:
 class PortalPLN:
     def __init__(self):
         if not REQUESTS_OK:
-            raise ImportError("requests library needed. Run: .venv/bin/pip install requests")
+            raise ImportError("requests library needed. Run: pip install requests")
         self.session = requests.Session()
-    
+
     def login(self) -> bool:
         try:
             r = self.session.post(f"{PORTAL_URL}/login/validate",
@@ -219,7 +375,7 @@ class PortalPLN:
             return r.status_code == 200
         except:
             return False
-    
+
     def fetch_grid(self, data_type: str, date_str: str) -> Dict:
         ep = PORTAL_ENDPOINTS[data_type]["get"]
         try:
@@ -237,7 +393,7 @@ class PortalPLN:
             return grid
         except:
             return {}
-    
+
     def update_cell(self, data_type: str, rowdata: Dict, col: str, value) -> bool:
         ep = PORTAL_ENDPOINTS[data_type]["update"]
         params = {'col': col}
@@ -253,64 +409,137 @@ class PortalPLN:
             pass
         return False
 
-# ============ SYNC ENGINE ============
+# ============ SYNC ENGINE (Rich Progress + Yellow Theme) ============
 def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run: bool = True):
-    """Full sync: fetch SUPER-I → push Portal PLN."""
-    
+    """Full sync: fetch SUPER-I → push Portal PLN. Rich progress + yellow theme."""
+
     type_labels = {"penyulang": "Beban Penyulang", "trafo": "Beban Trafo", "tegangan": "Tegangan Trafo"}
+
+    # Header with yellow theme
     header(f"SYNC {type_labels[data_type]}")
-    
+
     # 1. SUPER-I: fetch
-    info("SUPER-I APP: Logging in...")
-    token = superi_login()
+    if RICH and console and sc:
+        from rich.status import Status
+        with console.status(f"[bold bright_yellow]SUPER-I APP: Logging in...[/]", spinner="dots", spinner_style="bright_yellow"):
+            token = superi_login()
+    else:
+        info("SUPER-I APP: Logging in...")
+        token = superi_login()
+
     if not token:
         err("SUPER-I login failed")
         return False
-    ok("SUPER-I login OK")
-    
-    info(f"SUPER-I APP: Fetching {data_type} data...")
-    superi_data = fetch_superi_data(data_type, token, date_str)
+
+    if not (RICH and sc):
+        ok("SUPER-I login OK")
+    else:
+        console.print(f"  [bold green]✓[/] SUPER-I login OK")
+
+    if RICH and console and sc:
+        with console.status(f"[bold bright_yellow]Fetching {data_type} data...[/]", spinner="dots", spinner_style="bright_yellow"):
+            superi_data = fetch_superi_data(data_type, token, date_str)
+    else:
+        info(f"SUPER-I APP: Fetching {data_type} data...")
+        superi_data = fetch_superi_data(data_type, token, date_str)
+
     if not superi_data:
         err("No data from SUPER-I")
         return False
-    ok(f"Got {len(superi_data)} items from SUPER-I")
-    
+
+    if RICH and console:
+        console.print(f"  [bold green]✓[/] Got [bold bright_yellow]{len(superi_data)}[/] items from SUPER-I")
+    else:
+        ok(f"Got {len(superi_data)} items from SUPER-I")
+
     # 2. Portal PLN: login + fetch grid
-    info("Portal PLN: Logging in...")
-    pln = PortalPLN()
-    if not pln.login():
+    if RICH and console and sc:
+        with console.status(f"[bold bright_yellow]Portal PLN: Logging in...[/]", spinner="dots", spinner_style="bright_yellow"):
+            pln = PortalPLN()
+            portal_ok = pln.login()
+    else:
+        info("Portal PLN: Logging in...")
+        pln = PortalPLN()
+        portal_ok = pln.login()
+
+    if not portal_ok:
         err("Portal PLN login failed")
         return False
-    ok("Portal PLN login OK")
-    
-    info("Portal PLN: Fetching grid...")
-    grid = pln.fetch_grid(data_type, date_str)
+
+    if RICH and console:
+        console.print(f"  [bold green]✓[/] Portal PLN login OK")
+    else:
+        ok("Portal PLN login OK")
+
+    if RICH and console and sc:
+        with console.status(f"[bold bright_yellow]Portal PLN: Fetching grid...[/]", spinner="dots", spinner_style="bright_yellow"):
+            grid = pln.fetch_grid(data_type, date_str)
+    else:
+        info("Portal PLN: Fetching grid...")
+        grid = pln.fetch_grid(data_type, date_str)
+
     if not grid:
         err("Portal PLN grid fetch failed")
         return False
-    ok(f"Got {len(grid)} items from Portal PLN")
-    
+
+    if RICH and console:
+        console.print(f"  [bold green]✓[/] Got [bold bright_yellow]{len(grid)}[/] items from Portal PLN")
+    else:
+        ok(f"Got {len(grid)} items from Portal PLN")
+
     # 3. Sync
-    mode = f"{Y}DRY-RUN{R}" if dry_run else f"{G}LIVE{R}"
+    mode_label = "DRY-RUN" if dry_run else "LIVE"
+    mode_style = "bold yellow" if dry_run else "bold green"
     n_hours = jam_end - jam_start + 1
     cells_per_item = (n_hours * 2) if data_type == "tegangan" else n_hours
     total_cells = len(superi_data) * cells_per_item
-    info(f"Mode {mode} · Jam {jam_start:02d}-{jam_end:02d} · {len(superi_data)} item · {total_cells} cell")
-    print()
+
+    if RICH and console:
+        console.print(f"  Mode [{mode_style}]{mode_label}[/] · Jam [bold bright_yellow]{jam_start:02d}-{jam_end:02d}[/] · {len(superi_data)} item · {total_cells} cell")
+    else:
+        mode = f"\033[93mDRY-RUN\033[0m" if dry_run else f"\033[92mLIVE\033[0m"
+        info(f"Mode {mode} · Jam {jam_start:02d}-{jam_end:02d} · {len(superi_data)} item · {total_cells} cell")
+
+    if RICH and console:
+        console.print()
 
     updates = 0; errors = 0; skipped = 0
     error_list = []
     dry_samples = []
     done = 0
 
-    # Build normalized lookup for grid (handle name variations like "TRAFO PS 1" vs "TRAFO PS1")
     def _normalize(s: str) -> str:
-        return ''.join(s.upper().split())  # remove all whitespace + uppercase
+        return ''.join(s.upper().split())
 
     grid_normalized = {_normalize(k): (k, v) for k, v in grid.items()}
 
+    # Rich progress setup for LIVE mode
+    rich_prog = None
+    rich_task = None
+    use_rich_prog = RICH and not dry_run and console and console.is_terminal
+
+    if use_rich_prog:
+        try:
+            if sc:
+                rich_prog = sc.make_simple_progress()
+            if rich_prog is None:
+                from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, MofNCompleteColumn
+                rich_prog = Progress(
+                    TextColumn("[progress.description]{task.description}", style="white"),
+                    BarColumn(bar_width=24, style="dim yellow", complete_style="bright_yellow", finished_style="green"),
+                    TaskProgressColumn(style="bold bright_yellow"),
+                    MofNCompleteColumn(),
+                    TextColumn("[dim]{task.fields[extra]}[/]", justify="left"),
+                    console=console,
+                    transient=False,
+                )
+            rich_prog.start()
+            rich_task = rich_prog.add_task(f"[bold bright_yellow]Sync {type_labels[data_type]}[/]", total=total_cells, extra="")
+        except Exception:
+            rich_prog = None
+            rich_task = None
+
     for name, values in _h_shuffled(list(superi_data.items())):
-        # Try exact match first, then normalized
         rowdata = None
         if name in grid:
             rowdata = grid[name]
@@ -320,10 +549,14 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                 _, rowdata = grid_normalized[norm]
 
         if rowdata is None:
-            # item tidak ada di grid Portal → semua cell-nya skip
             skipped += cells_per_item
             done += cells_per_item
-            if not dry_run:
+            if rich_prog and rich_task is not None:
+                try:
+                    rich_prog.update(rich_task, completed=done, extra=name[:16])
+                except Exception:
+                    pass
+            elif not dry_run:
                 live_progress(done, total_cells, name)
             continue
 
@@ -331,7 +564,6 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
             mv_vals = values.get("mv", [])
             hv_vals = values.get("hv", [])
             for h in range(jam_start, jam_end + 1):
-                # MV → j column
                 if h < len(mv_vals) and mv_vals[h] is not None:
                     col = f"j{h:02d}"
                     existing = rowdata.get(col)
@@ -350,7 +582,12 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                 else:
                     skipped += 1
                 done += 1
-                if not dry_run:
+                if rich_prog and rich_task is not None:
+                    try:
+                        rich_prog.update(rich_task, completed=done, extra=name[:16])
+                    except Exception:
+                        pass
+                elif not dry_run:
                     live_progress(done, total_cells, name)
 
                 if h < len(hv_vals) and hv_vals[h] is not None:
@@ -371,7 +608,12 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                 else:
                     skipped += 1
                 done += 1
-                if not dry_run:
+                if rich_prog and rich_task is not None:
+                    try:
+                        rich_prog.update(rich_task, completed=done, extra=name[:16])
+                    except Exception:
+                        pass
+                elif not dry_run:
                     live_progress(done, total_cells, name)
         else:
             jams = values if isinstance(values, list) else []
@@ -379,7 +621,12 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                 if h >= len(jams) or jams[h] is None:
                     skipped += 1
                     done += 1
-                    if not dry_run:
+                    if rich_prog and rich_task is not None:
+                        try:
+                            rich_prog.update(rich_task, completed=done, extra=name[:16])
+                        except Exception:
+                            pass
+                    elif not dry_run:
                         live_progress(done, total_cells, name)
                     continue
                 col = f"j{h:02d}"
@@ -397,43 +644,65 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                         errors += 1; error_list.append(f"{name} {col}={jams[h]}")
                     _h_sleep(0.5, 1.9)
                 done += 1
-                if not dry_run:
+                if rich_prog and rich_task is not None:
+                    try:
+                        rich_prog.update(rich_task, completed=done, extra=name[:16])
+                    except Exception:
+                        pass
+                elif not dry_run:
                     live_progress(done, total_cells, name)
 
-    # akhiri bar live, lalu ringkasan
-    if not dry_run:
+    # End live bar, summary
+    if rich_prog:
+        try:
+            rich_prog.stop()
+        except Exception:
+            pass
+    if not dry_run and not rich_prog:
         print()
+
     summary_box(type_labels[data_type], updates, errors, skipped, total_cells)
+
     if dry_run and dry_samples:
-        print(f"  {D}Contoh perubahan:{R}")
-        for s in dry_samples:
-            print(f"    {C}{s}{R}")
+        if RICH and console:
+            console.print(f"  [dim]Contoh perubahan:[/]")
+            for s in dry_samples:
+                console.print(f"    [cyan]{s}[/]")
+        else:
+            print(f"  Contoh perubahan:")
+            for s in dry_samples:
+                print(f"    {s}")
+
     if error_list:
         warn(f"{len(error_list)} error: " + "; ".join(error_list[:5]) + (" …" if len(error_list) > 5 else ""))
-    return errors == 0
 
-# Menu interaktif sudah dipindah ke superi_app.py (superi cli → [P] Sync ke Portal APD).
-# superi_sync.py sekarang library: do_sync() dipanggil cli/web/auto.
-# Non-interactive: superi sync --type ... --jam ... --dry-run
+    return errors == 0
 
 # ============ CLI ARGS ============
 def main():
     args = sys.argv[1:]
-    
+
     if '--help' in args or '-h' in args:
-        print(__doc__)
+        if RICH and console:
+            from rich.panel import Panel
+            help_text = __doc__ or "SUPER-I Sync Tool"
+            console.print(Panel(help_text.strip(), title="[bold bright_yellow]Help[/]", border_style="bright_yellow"))
+        else:
+            print(__doc__)
         sys.exit(0)
-    
+
     if '--version' in args or '-v' in args:
-        print(f"superi sync v{__version__}")
+        if RICH and console:
+            console.print(f"[bold bright_yellow]superi sync[/] v{__version__}")
+        else:
+            print(f"superi sync v{__version__}")
         sys.exit(0)
-    
-    # Parse args
+
     data_type = None
     jam_start = 0; jam_end = 23
     date_str = datetime.now().strftime("%Y-%m-%d")
     dry_run = '--dry-run' in args
-    
+
     for i, a in enumerate(args):
         if a == '--type' and i+1 < len(args):
             t = args[i+1]
@@ -449,8 +718,7 @@ def main():
                 jam_start = jam_end = int(v)
         elif a == '--date' and i+1 < len(args):
             date_str = args[i+1]
-    
-    # Non-interactive mode (untuk script/cron: superi sync --type ... --jam ...)
+
     if data_type:
         types = ["penyulang", "trafo", "tegangan"] if data_type == 'all' else [data_type]
         for dt in types:
@@ -459,10 +727,14 @@ def main():
                 sys.exit(1)
         sys.exit(0)
 
-    # No args → arahkan ke superi cli (menu sync sekarang di cli)
-    print(f"\n  Menu sync sekarang tergabung di SUPER-I CLI.")
-    print(f"  Jalankan:  superi cli   →  pilih [P] Sync ke Portal APD")
-    print(f"  Atau non-interactive: superi sync --type all --jam 08 --dry-run\n")
+    if RICH and console:
+        console.print(f"\n  [dim]Menu sync sekarang tergabung di SUPER-I CLI.[/]")
+        console.print(f"  Jalankan:  [bold bright_yellow]superi cli[/]   →  pilih [bold cyan][P] Sync ke Portal APD[/]")
+        console.print(f"  Atau non-interactive: [dim]superi sync --type all --jam 08 --dry-run[/]\n")
+    else:
+        print(f"\n  Menu sync sekarang tergabung di SUPER-I CLI.")
+        print(f"  Jalankan:  superi cli   →  pilih [P] Sync ke Portal APD")
+        print(f"  Atau non-interactive: superi sync --type all --jam 08 --dry-run\n")
     sys.exit(0)
 
 if __name__ == '__main__':

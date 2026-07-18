@@ -7,6 +7,7 @@ REM ============================================================
 setlocal enabledelayedexpansion
 set "SUPERI_DIR=%~dp0"
 set "SUPERI_CMD=%~1"
+set "CLI_ARGS="
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 
@@ -39,7 +40,7 @@ cd /d "%SUPERI_DIR%"
 
 REM Pastikan dependency + modul project bisa di-import sebelum jalan.
 REM Ini penting untuk double-click / Task Scheduler Windows.
-"%PYTHON%" -c "import sys, os; sys.path.insert(0, os.getcwd()); import requests, flask, bs4, superi_sync, superi_auto" >nul 2>nul
+"%PYTHON%" -c "import sys, os; sys.path.insert(0, os.getcwd()); import requests, flask, bs4, superi_sync, superi_auto; import rich, textual" >nul 2>nul
 if errorlevel 1 (
     echo.
     echo   Menyiapkan dependency Python...
@@ -52,7 +53,7 @@ if errorlevel 1 (
         if /i not "%SUPERI_CMD%"=="auto" pause
         exit /b 1
     )
-    "%PYTHON%" -c "import sys, os; sys.path.insert(0, os.getcwd()); import requests, flask, bs4, superi_sync, superi_auto" >nul 2>nul
+    "%PYTHON%" -c "import sys, os; sys.path.insert(0, os.getcwd()); import requests, flask, bs4, superi_sync, superi_auto; import rich, textual" >nul 2>nul
     if errorlevel 1 (
         echo.
         echo   [X] Modul SUPER-I belum bisa di-import.
@@ -67,8 +68,14 @@ if errorlevel 1 (
 REM Tanpa argumen (double-click) → langsung buka CLI interaktif
 if "%1"=="" goto :run_cli
 
-if /i "%1"=="cli" goto :run_cli
-if /i "%1"=="c" goto :run_cli
+if /i "%1"=="cli" (
+    set "CLI_ARGS=%2 %3 %4 %5 %6 %7 %8 %9"
+    goto :run_cli
+)
+if /i "%1"=="c" (
+    set "CLI_ARGS=%2 %3 %4 %5 %6 %7 %8 %9"
+    goto :run_cli
+)
 if /i "%1"=="web" (
     echo.
     echo   Menjalankan Web Dashboard... Buka: http://localhost:8888
@@ -81,13 +88,21 @@ if /i "%1"=="w" (
 )
 if /i "%1"=="sync" (
     shift
-    "%PYTHON%" superi_sync.py %1 %2 %3 %4 %5 %6 %7 %8 %9
+    if "%1"=="" (
+        "%PYTHON%" superi_app.py
+    ) else (
+        "%PYTHON%" superi_sync.py %1 %2 %3 %4 %5 %6 %7 %8 %9
+    )
     pause
     goto :end
 )
 if /i "%1"=="s" (
     shift
-    "%PYTHON%" superi_sync.py %1 %2 %3 %4 %5 %6 %7 %8 %9
+    if "%1"=="" (
+        "%PYTHON%" superi_app.py
+    ) else (
+        "%PYTHON%" superi_sync.py %1 %2 %3 %4 %5 %6 %7 %8 %9
+    )
     pause
     goto :end
 )
@@ -141,6 +156,7 @@ echo.
 echo   Commands:
 echo     ^(tanpa argumen^)   CLI interaktif ^(default - cocok untuk double-click^)
 echo     cli, c            CLI interaktif
+echo       --classic       Rich klasik tanpa fullscreen
 echo     web, w            Web dashboard ^(http://localhost:8888^)
 echo     sync, s [opts]    Sync data ke Portal APD
 echo     auto, a [opts]    Auto input + sync ^(untuk Task Scheduler^)
@@ -163,7 +179,7 @@ goto :end
 :run_cli
 echo.
 echo   Menjalankan SUPER-I APP CLI...
-"%PYTHON%" superi_app.py
+"%PYTHON%" superi_app.py %CLI_ARGS%
 if errorlevel 1 (
     echo.
     echo   [X] SUPER-I APP berhenti dengan error. Cek pesan di atas.

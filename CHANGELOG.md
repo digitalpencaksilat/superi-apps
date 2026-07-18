@@ -5,6 +5,49 @@ Semua perubahan penting pada project ini akan didokumentasikan di file ini.
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0),
 dan project ini menggunakan [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.4.0] — 2026-07-18
+
+### Added
+
+- Fullscreen TUI berbasis Textual + Rich dengan tema amber/kuning, outer border, header, viewport scroll, sticky input, dan footer shortcut yang responsif.
+- Native views untuk Auto Mode, Sumber Foto, Sync Portal, Setup Kredensial manual, Batch per Jam, Lihat Data, dan daftar item Input Manual.
+- Layout responsif desktop, medium, dan narrow untuk kartu status, panel pengaturan, action card, serta tabel data.
+- Service reusable `superi_settings.py` untuk snapshot dan update pengaturan Auto, scheduler, foto, serta kredensial.
+- Service reusable `superi_batch.py` untuk status 24 periode, Smart Suggest, submit Batch per Jam, progress callback, dan rollback record ketika foto gagal.
+- Preview scheduler immutable: jam dan menit yang dikonfirmasi adalah plan yang sama persis saat cron atau Windows Task Scheduler dipasang.
+- Halaman Sync Portal native dengan kartu koneksi, konfigurasi, ringkasan, log, dry-run wajib sebelum LIVE, dan handoff otomatis dari hasil Batch per Jam.
+- Wizard Setup Kredensial manual dengan identitas tersamarkan, password masked, penyimpanan atomik, serta uji login SUPER-I dan Portal APD.
+
+### Changed
+
+- Menu `1/2/3` Lihat Data kini memakai DataTable native selebar viewport dan breadcrumb tunggal; kolom menyesuaikan ukuran terminal dan strip 24 jam tetap utuh.
+- Menu `4/5/6` Input Manual kini memakai tabel item full-width tanpa header ganda; item CB OFF dan item penuh ditolak sebelum workflow input.
+- Menu `A/B/C` Batch per Jam kini memakai halaman native reusable untuk Penyulang, Beban Trafo, dan Tegangan, termasuk tabel periode, Smart Suggest, editor nilai, progress, hasil, dan Sync Portal.
+- Menu `D`, `T`, `P`, dan `S` membuka native Textual views; business logic klasik tetap tersedia melalui `superi cli --classic` atau `SUPERI_CLASSIC_UI=1`.
+- Busy prompt menyembunyikan kotak input, mengunci navigasi selama worker berjalan, dan memperbarui footer agar state interaksi jelas.
+- Login Ulang kini menampilkan hasil berhasil/gagal, nama pengguna, GI, dan membersihkan sesi lama jika autentikasi gagal.
+- Dashboard utama dirapikan menjadi panel operasi dan pengaturan tanpa heading tambahan, dengan gutter dan padding yang konsisten.
+- Output CLI/Rich untuk sync, auto, input, dan render tabel diselaraskan melalui `superi_console.py` dan `cli_render.py`.
+
+### Fixed
+
+- Alignment action card Auto Mode dan Batch per Jam tidak lagi bergantung pada jumlah spasi manual.
+- Header Rich ganda di Lihat Data, Input Manual, dan Batch per Jam tidak lagi muncul pada fullscreen TUI; breadcrumb menjadi satu-satunya judul halaman.
+- Progress berbasis carriage return tidak lagi membanjiri RichLog.
+- Timestamp batch foto pada awal jam mempertahankan gap minimum delapan detik; beberapa menit pertama memakai overlap historis pendek ke jam sebelumnya agar 25 item tidak dipampatkan.
+- State password, focus, disabled input, error, back navigation, dan worker completion dipulihkan secara konsisten.
+
+### Compatibility
+
+- Fullscreen hanya aktif saat stdin/stdout merupakan TTY.
+- Classic CLI, cron, Windows Task Scheduler, web, pipe, dan scripting mode tetap menggunakan jalur non-fullscreen.
+- Dependency baru: `textual>=0.89.0,<1.0`; Rich tetap digunakan untuk semantic rendering dan log.
+
+### Verified
+
+- 140 tests passed, termasuk 40 headless Textual tests.
+- Python compile, shell launcher syntax, dan `git diff --check` lulus.
+
 ## [1.3.1] — 2026-07-17
 
 ### Fixed

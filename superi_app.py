@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SUPER-I APP - Interactive Data Input
+SUPER-I APP - Interactive Data Input (Rich Edition - Tema Kuning)
 =====================================
 Interface interaktif untuk input data SUPER-I APP.
 Tinggal pilih menu, script akan memandu langkah demi langkah.
@@ -31,6 +31,11 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".superi_
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
+
+try:
+    import superi_console as sc
+except Exception:
+    sc = None
 
 try:
     import cli_render as ui
@@ -117,18 +122,25 @@ def _get_jpeg_bytes(single=True, item_name=None, data_type=None, subtype=None):
 
 def _enable_win_vt100():
     """Enable VT100 escape processing on Windows 10+ so \\r + ANSI colors work."""
+    if sc is not None:
+        try:
+            if hasattr(sc, "_enable_win_vt100"):
+                sc._enable_win_vt100()
+                return
+        except Exception:
+            pass
     if sys.platform != 'win32':
         return
     try:
         import ctypes
         kernel32 = ctypes.windll.kernel32
-        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        handle = kernel32.GetStdHandle(-11)
         mode = ctypes.c_ulong()
         kernel32.GetConsoleMode(handle, ctypes.byref(mode))
-        # ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
         kernel32.SetConsoleMode(handle, mode.value | 0x0004)
     except Exception:
-        pass  # older Windows — \r still works, ANSI colors may degrade
+        pass
+
 
 # Fallback: kalau di project folder tidak ada, cek home (~/.superi_config.json)
 _HOME_CONFIG = os.path.expanduser("~/.superi_config.json")
@@ -371,144 +383,116 @@ def clear_credentials(purge_all=False, keep_portal=False, keep_scheduler=False, 
     return result
 
 
-def do_logout_interactive(current_user=None):
-    """Menu logout interaktif: konfirmasi, wipe, auto-disable, scheduler cleanup.
 
-    Akan dipanggil dari main() menu [O].
-    Return (should_exit_to_setup: bool, new_config: dict)
-    """
+
+
+def do_logout_interactive(current_user=None):
     clear()
     header("🚪 LOGOUT AKUN")
-    print()
+    _cprint("")
     cfg = load_config()
-
     nip = cfg.get("nip", "")
     has_portal = bool(cfg.get("portal_user") and cfg.get("portal_password"))
     auto_on = cfg.get("auto_enabled", False)
     sched_on = scheduler_is_installed()
     os_name = "Task Scheduler" if platform.system() == "Windows" else "cron"
-
-    # Info akun aktif
     if current_user and isinstance(current_user, dict):
         nama = current_user.get("namaLengkap", "?")
-        print(f"  {C['B']}Akun aktif:{C['R']} {nama} {C['D']}({nip}){C['R']}")
+        _cprint(f"  [bold]Akun aktif:[/] {nama} [dim]({nip})[/]")
     elif nip:
-        print(f"  {C['B']}Akun aktif:{C['R']} {nip}")
+        _cprint(f"  [bold]Akun aktif:[/] {nip}")
     else:
-        print(f"  {C['Y']}⚠ Tidak ada akun tersimpan di config{C['R']}")
-        print(f"  {C['D']}Token di RAM akan dibuang, tapi tidak ada kredensial file yang dihapus.{C['R']}")
+        _warn("Tidak ada akun tersimpan di config")
+        _dim("Token di RAM akan dibuang, tapi tidak ada kredensial file yang dihapus.")
         print()
-        input(f"  {C['D']}[Enter]{C['R']}")
+        if sc and hasattr(sc, 'pause'):
+            sc.pause()
+        else:
+            input("  [Enter]")
         return False, cfg
-
-    print()
-    print(f"  {C['Y']}{C['B']}Yang akan terjadi saat logout:{C['R']}")
-    print(f"  {C['D']}  {'─'*44}{C['R']}")
-    print(f"  {C['RE']}  ✗ Hapus:{C['R']} NIP + Password SUPER-I")
+    _cprint("")
+    _cprint("  [bold bright_yellow]Yang akan terjadi saat logout:[/]")
+    _dim(f"  {'─'*44}")
+    _cprint(f"  [bold red]  ✗ Hapus:[/] NIP + Password SUPER-I")
     if has_portal:
-        print(f"  {C['RE']}  ✗ Hapus:{C['R']} Portal APD (user + password)")
+        _cprint(f"  [bold red]  ✗ Hapus:[/] Portal APD (user + password)")
     else:
-        print(f"  {C['D']}  · Portal APD belum diset{C['R']}")
-    print(f"  {C['G']}  ✓ Keep:{C['R']} GI ID, Portal URL, history_days (setting non-kredensial)")
-    print(f"  {C['RE']}  ✗ Auto Mode:{C['R']} {'AKTIF -> akan OTOMATIS NONAKTIF' if auto_on else 'sudah nonaktif'}")
+        _dim("  · Portal APD belum diset")
+    _cprint(f"  [bold green]  ✓ Keep:[/] GI ID, Portal URL, history_days")
+    _cprint(f"  [bold red]  ✗ Auto Mode:[/] {'AKTIF -> akan OTOMATIS NONAKTIF' if auto_on else 'sudah nonaktif'}")
     sched_msg = 'TERPASANG -> akan OTOMATIS DIHAPUS' if sched_on else 'belum terpasang'
-    print(f"  {C['RE']}  ✗ Scheduler {os_name}:{C['R']} {sched_msg}")
-    print(f"  {C['D']}  · Token RAM: dibuang (perlu Login Ulang / Setup){C['R']}")
-    print(f"  {C['D']}  · Backup: .superi_config.json.bak akan dibuat{C['R']}")
-    print()
-
-    # Opsi
+    _cprint(f"  [bold red]  ✗ Scheduler {os_name}:[/] {sched_msg}")
+    _dim("  · Token RAM: dibuang (perlu Login Ulang / Setup)")
+    _dim("  · Backup: .superi_config.json.bak akan dibuat")
+    _cprint("")
     keep_portal = False
     keep_sched = False
-
     if has_portal:
-        ans = input(f"  {C['B']}Tetap simpan kredensial Portal APD?{C['R']} {C['D']}(y/N){C['R']}: ").strip().lower()
-        keep_portal = (ans == 'y')
-
+        ans = sc.prompt_ask("Tetap simpan kredensial Portal APD?", default="n") if sc else input("  Tetap simpan kredensial Portal APD? (y/N): ").strip().lower()
+        keep_portal = str(ans).lower() in ("y","yes","true","1") if sc else (ans == 'y')
     if sched_on:
-        ans2 = input(f"  {C['B']}Hapus jadwal {os_name}?{C['R']} {C['D']}(Y/n){C['R']}: ").strip().lower()
-        # default Y (hapus), n = keep
-        keep_sched = (ans2 == 'n')
-
+        ans2 = sc.prompt_ask(f"Hapus jadwal {os_name}?", default="y") if sc else input(f"  Hapus jadwal {os_name}? (Y/n): ").strip().lower()
+        keep_sched = str(ans2).lower() in ("n","no") if sc else (ans2 == 'n')
     print()
-    final = input(f"  {C['RE']}{C['B']}Yakin logout & hapus kredensial?{C['R']} {C['D']}(y/N){C['R']}: ").strip().lower()
-    if final != 'y':
-        print(f"\n  {C['Y']}⊘ Logout dibatalkan.{C['R']}")
-        input(f"  {C['D']}[Enter]{C['R']}")
+    if sc:
+        final = sc.confirm_ask("Yakin logout & hapus kredensial?", default=False)
+    else:
+        final = input("  Yakin logout & hapus kredensial? (y/N): ").strip().lower() == 'y'
+    if not final:
+        _warn("Logout dibatalkan.")
+        if sc and hasattr(sc, 'pause'):
+            sc.pause()
+        else:
+            input("  [Enter]")
         return False, cfg
-
-    # Eksekusi
-    print()
-    print(f"  {C['Y']}Melakukan logout...{C['R']}")
-
+    _cprint("")
+    _cprint("  [bold yellow]Melakukan logout...[/]")
     bak_path = backup_config()
     if bak_path:
-        print(f"  {C['D']}  · Backup dibuat: {os.path.basename(bak_path)}{C['R']}")
-
-    # Wipe
-    status = clear_credentials(
-        purge_all=False,
-        keep_portal=keep_portal,
-        keep_scheduler=keep_sched,
-    )
-
-    # Verifikasi
+        _dim(f"  · Backup dibuat: {os.path.basename(bak_path)}")
+    status = clear_credentials(purge_all=False, keep_portal=keep_portal, keep_scheduler=keep_sched)
     new_cfg = load_config()
-    print(f"  {C['G']}  ✓ Kredensial SUPER-I dihapus{C['R']}")
+    _ok("Kredensial SUPER-I dihapus")
     if not keep_portal and has_portal:
-        print(f"  {C['G']}  ✓ Kredensial Portal APD dihapus{C['R']}")
+        _ok("Kredensial Portal APD dihapus")
     elif keep_portal:
-        print(f"  {C['D']}  · Kredensial Portal APD dipertahankan{C['R']}")
-
+        _dim("  · Kredensial Portal APD dipertahankan")
     if status.get("auto_status") is None:
-        # kita sudah set auto_enabled=False di clear_credentials
-        print(f"  {C['G']}  ✓ Auto Mode OTOMATIS NONAKTIF{C['R']}")
+        _ok("Auto Mode OTOMATIS NONAKTIF")
     if sched_on and not keep_sched:
         if not scheduler_is_installed():
-            print(f"  {C['G']}  ✓ Scheduler {os_name} OTOMATIS DIHAPUS{C['R']}")
+            _ok(f"Scheduler {os_name} OTOMATIS DIHAPUS")
         else:
-            print(f"  {C['Y']}  ⚠ Gagal hapus {os_name}, silakan hapus manual{C['R']}")
-
-    print()
-    print(f"  {C['G']}✓ Logout berhasil!{C['R']}")
-    print(f"  {C['D']}  Token di RAM sudah dibuang.{C['R']}")
-    print(f"  {C['D']}  Gunakan [S] Setup untuk login akun baru, atau{C['R']}")
-    print(f"  {C['D']}  tutup dan buka CLI lagi -> otomatis minta setup.{C['R']}")
-    print()
-    print(f"  {C['D']}  Untuk login ulang: NIP + password baru akan diminta saat{C['R']}")
-    print(f"  {C['D']}  kamu pilih [S] Setup atau next start.{C['R']}")
-    print()
-    input(f"  {C['D']}[Enter untuk kembali ke menu...]{C['R']}")
-
+            _warn(f"Gagal hapus {os_name}, silakan hapus manual")
+    _cprint("")
+    _ok("Logout berhasil!")
+    _dim("  Token di RAM sudah dibuang.")
+    _dim("  Gunakan [S] Setup untuk login akun baru")
+    _cprint("")
+    _dim("  Untuk login ulang: NIP + password baru akan diminta")
+    _cprint("")
+    if sc and hasattr(sc, 'pause'):
+        sc.pause()
+    else:
+        input("  [Enter untuk kembali ke menu...]")
     return True, new_cfg
 
-
 def cmd_logout_cli(argv):
-    """Non-interactive CLI: superi_app.py --logout [options]
-    Options:
-      --yes              skip konfirmasi
-      --purge-all        hapus file config total
-      --keep-portal      jangan hapus portal creds
-      --keep-scheduler   jangan uninstall cron/task
-    """
     purge_all = "--purge-all" in argv
     keep_portal = "--keep-portal" in argv
     keep_sched = "--keep-scheduler" in argv
     force_yes = "--yes" in argv or "-y" in argv
-
     cfg = load_config()
     nip = cfg.get("nip", "")
     has_portal = bool(cfg.get("portal_user"))
     auto_on = cfg.get("auto_enabled", False)
     sched_on = scheduler_is_installed()
-
     if not nip and not os.path.exists(CONFIG_FILE):
-        print(f"  {C['Y']}⚠ Tidak ada config ditemukan, tidak ada yang perlu di-logout{C['R']}")
+        _warn("Tidak ada config ditemukan, tidak ada yang perlu di-logout")
         return True
-
     if not force_yes:
         print()
-        print(f"  {C['Y']}{C['B']}LOGOUT{C['R']}")
+        _cprint("  [bold yellow]LOGOUT[/]")
         if nip:
             print(f"  Akun: {nip}")
         if auto_on:
@@ -519,34 +503,27 @@ def cmd_logout_cli(argv):
         print()
         ans = input(f"  Yakin logout? (y/N): ").strip().lower()
         if ans != 'y':
-            print(f"  {C['Y']}⊘ Dibatalkan{C['R']}")
+            _warn("Dibatalkan")
             return False
-
     bak = backup_config()
     if bak:
         print(f"  Backup: {bak}")
-
-    status = clear_credentials(
-        purge_all=purge_all,
-        keep_portal=keep_portal,
-        keep_scheduler=keep_sched,
-    )
-
+    status = clear_credentials(purge_all=purge_all, keep_portal=keep_portal, keep_scheduler=keep_sched)
     if purge_all:
-        print(f"  {C['G']}✓ Config file dihapus total (purge){C['R']}")
+        _ok("Config file dihapus total (purge)")
     else:
-        print(f"  {C['G']}✓ Kredensial SUPER-I dihapus, auto_enabled=False{C['R']}")
+        _ok("Kredensial SUPER-I dihapus, auto_enabled=False")
         if not keep_portal and has_portal:
-            print(f"  {C['G']}✓ Portal kredensial dihapus{C['R']}")
+            _ok("Portal kredensial dihapus")
         if sched_on and not keep_sched:
             if not scheduler_is_installed():
-                print(f"  {C['G']}✓ Scheduler dihapus{C['R']}")
+                _ok("Scheduler dihapus")
             else:
-                print(f"  {C['Y']}⚠ Scheduler gagal dihapus (cek permission){C['R']}")
-
+                _warn("Scheduler gagal dihapus (cek permission)")
     print()
-    print(f"  {C['G']}✓ Logout berhasil. Login ulang: jalankan superi cli → [S] Setup{C['R']}")
+    _ok("Logout berhasil. Login ulang: jalankan superi cli → [S] Setup")
     return True
+
 
 _VALID_HISTORY_DAYS = {3, 7, 14}
 
@@ -1140,56 +1117,147 @@ def smart_suggest_value(token, data_type, item_id, periode, date_str, days_back=
     
     return int(suggested), f"{pattern_type} avg {pattern_avg:.0f}A"
 
+
+
+
 def clear():
+    """Clear screen - Rich yellow edition."""
+    if sc is not None:
+        try:
+            sc.clear()
+            return
+        except Exception:
+            pass
     os.system('clear' if os.name != 'nt' else 'cls')
 
-# Terminal colors
+# Backwards compat C dict - ANSI fallback, yellow primary (tema kuning #FFC107)
 C = {
-    'R': '\033[0m',      # Reset
-    'B': '\033[1m',      # Bold
-    'D': '\033[2m',      # Dim
-    'G': '\033[92m',     # Green
-    'Y': '\033[93m',     # Yellow
-    'RE': '\033[91m',    # Red
-    'C': '\033[96m',     # Cyan
-    'M': '\033[95m',     # Magenta
-    'W': '\033[97m',     # White
-    'BG': '\033[44m',    # Blue background
+    'R': '\033[0m',
+    'B': '\033[1m',
+    'D': '\033[2m',
+    'G': '\033[92m',
+    'Y': '\033[93m',
+    'RE': '\033[91m',
+    'C': '\033[93m',
+    'M': '\033[93m',
+    'W': '\033[97m',
+    'BG': '\033[43m',
 }
 
+def _cprint(msg):
+    if sc is not None and getattr(sc, 'console', None):
+        try:
+            sc.console.print(msg)
+            return
+        except Exception:
+            pass
+    import re as _re
+    clean = _re.sub(r'\[.*?\]', '', msg)
+    print(clean)
+
+def _ok(msg):
+    if sc is not None:
+        try:
+            if hasattr(sc, 'ok'):
+                sc.ok(msg)
+                return
+        except Exception:
+            pass
+    _cprint(f"[bold green]✓ {msg}[/]")
+
+def _err(msg):
+    if sc is not None:
+        try:
+            if hasattr(sc, 'err'):
+                sc.err(msg)
+                return
+        except Exception:
+            pass
+    _cprint(f"[bold red]✗ {msg}[/]")
+
+def _warn(msg):
+    if sc is not None:
+        try:
+            if hasattr(sc, 'warn_msg'):
+                sc.warn_msg(msg)
+                return
+        except Exception:
+            pass
+    _cprint(f"[bold bright_yellow]⚠ {msg}[/]")
+
+def _dim(msg):
+    if sc is not None and getattr(sc, 'console', None):
+        try:
+            sc.console.print(f"[dim]{msg}[/]")
+            return
+        except Exception:
+            pass
+    print(f"  {msg}")
+
 def header(title):
+    if sc is not None:
+        try:
+            sc.header(title)
+            return
+        except Exception:
+            pass
     w = 60
-    print(f"{C['C']}{'━' * w}")
-    print(f"  {C['B']}{C['W']}{title}{C['R']}")
-    print(f"{C['C']}{'━' * w}{C['R']}")
+    print(f"{'━'*w}")
+    print(f"  {title}")
+    print(f"{'━'*w}")
 
 def sub_header(title):
-    print(f"\n  {C['C']}▸ {C['B']}{title}{C['R']}")
-    print(f"  {C['D']}{'─' * 50}{C['R']}")
+    if sc is not None:
+        try:
+            sc.sub_header(title)
+            return
+        except Exception:
+            pass
+    print(f"\n  ▸ {title}")
+    print(f"  {'─'*50}")
 
 def status_bar(user, gi_id, date_str):
-    """Status bar di bawah header."""
+    if sc is not None:
+        try:
+            sc.status_bar(user, gi_id, date_str)
+            return
+        except Exception:
+            pass
     if user:
-        print(f"  {C['D']}┌─────────────────────────────────────────────────────┐{C['R']}")
-        print(f"  {C['D']}│{C['R']}  {C['G']}●{C['R']} {C['B']}{user['namaLengkap']}{C['R']} {C['D']}({', '.join(user['roles'])}){C['R']}")
-        print(f"  {C['D']}│{C['R']}  📍 GI: {gi_id}  📅 {date_str}")
-        print(f"  {C['D']}└─────────────────────────────────────────────────────┘{C['R']}")
+        print(f"  ┌─────────────────────────────────────────────────────┐")
+        print(f"  │  ● {user['namaLengkap']} ({', '.join(user['roles'])})")
+        print(f"  │  📍 GI: {gi_id}  📅 {date_str}")
+        print(f"  └─────────────────────────────────────────────────────┘")
     else:
-        print(f"  {C['D']}┌─────────────────────────────────────────────────────┐{C['R']}")
-        print(f"  {C['D']}│{C['R']}  {C['RE']}○{C['R']} Belum login  📅 {date_str}")
-        print(f"  {C['D']}└─────────────────────────────────────────────────────┘{C['R']}")
+        print(f"  ┌─────────────────────────────────────────────────────┐")
+        print(f"  │  ○ Belum login  📅 {date_str}")
+        print(f"  └─────────────────────────────────────────────────────┘")
 
 def menu(title, options):
-    """Tampilkan menu dan return pilihan user."""
     while True:
         clear()
         header(title)
         for i, (key, desc) in enumerate(options, 1):
-            print(f"  [{i}] {desc}")
-        print(f"  [0] Keluar")
+            if sc is not None and getattr(sc, 'console', None):
+                try:
+                    sc.console.print(f"  [bold bright_yellow][{i}][/] {desc}")
+                except Exception:
+                    print(f"  [{i}] {desc}")
+            else:
+                print(f"  [{i}] {desc}")
+        if sc is not None and getattr(sc, 'console', None):
+            try:
+                sc.console.print("  [dim][0] Keluar[/]")
+            except Exception:
+                print("  [0] Keluar")
+        else:
+            print("  [0] Keluar")
         print()
         try:
-            choice = input("  Pilih > ").strip()
+            if sc is not None:
+                choice = sc.prompt_ask("Pilih", default="0")
+            else:
+                choice = input("  Pilih > ").strip()
             if choice == '0':
                 return None
             idx = int(choice) - 1
@@ -1197,41 +1265,119 @@ def menu(title, options):
                 return options[idx][0]
         except (ValueError, IndexError):
             pass
-        print(f"  {C['RE']}✗ Pilihan tidak valid!{C['R']}")
+        if sc is not None:
+            try:
+                sc.warn_msg("Pilihan tidak valid!")
+            except Exception:
+                print("  ✗ Pilihan tidak valid!")
+        else:
+            print("  ✗ Pilihan tidak valid!")
 
 def input_with_default(prompt, default=""):
+    if sc is not None:
+        try:
+            return sc.prompt_ask(prompt, default=default if default else None)
+        except Exception:
+            pass
     if default:
         val = input(f"  {prompt} [{default}]: ").strip()
         return val if val else default
     return input(f"  {prompt}: ").strip()
 
 def confirm(msg):
-    return input(f"  {msg} {C['D']}(y/n){C['R']}: ").strip().lower() == 'y'
+    if sc is not None:
+        try:
+            return sc.confirm_ask(msg, default=False)
+        except Exception:
+            pass
+    return input(f"  {msg} (y/n): ").strip().lower() == 'y'
+
+
+
+def _rich_print_table(items, data_type, date_str=None, kind="item"):
+    if ui and sc and getattr(sc, 'console', None):
+        try:
+            if getattr(sc, 'RICH_AVAILABLE', False):
+                if kind == "item" and hasattr(ui, "item_table_rich"):
+                    t = ui.item_table_rich(items, data_type)
+                    sc.console.print(t)
+                    return True
+                if kind == "data" and hasattr(ui, "data_view_rich"):
+                    t = ui.data_view_rich(items, data_type, date_str)
+                    sc.console.print(t)
+                    return True
+                if kind == "suggest" and hasattr(ui, "suggest_table_rich"):
+                    t = ui.suggest_table_rich(items)
+                    sc.console.print(t)
+                    return True
+                if kind == "suggest_pool" and hasattr(ui, "suggest_table_with_pool_rich"):
+                    t = ui.suggest_table_with_pool_rich(items)
+                    sc.console.print(t)
+                    return True
+                if kind == "existing" and hasattr(ui, "existing_data_rich"):
+                    t = ui.existing_data_rich(items, data_type)
+                    sc.console.print(t)
+                    return True
+        except Exception:
+            pass
+    return False
+
+def _print_summary_rich(success, fail, total, label):
+    if sc and getattr(sc, 'console', None):
+        try:
+            if ui and hasattr(ui, "summary_panel_rich"):
+                panel = ui.summary_panel_rich(success, fail, total, label)
+                sc.console.print(panel)
+                return
+            sc.summary_box(success, fail, total, label)
+            return
+        except Exception:
+            pass
+    if ui:
+        try:
+            print(ui.render_summary_box(success, fail, total, label))
+            return
+        except Exception:
+            pass
+    print(f"  Ringkasan {label}: {success}/{total}")
+
+def _get_suggestion_table_rows_for_display(rows):
+    if not _rich_print_table(rows, None, kind="suggest"):
+        if ui:
+            for ln in ui.render_suggest_table(rows):
+                print(ln)
+        else:
+            print(f"  {'No':<4}{'Nama':<18}{'Suggest':<14}Info")
+            for no, nama, val, info in rows:
+                print(f"  {no:<4}{str(nama)[:18]:<18}{val:<14}{info}")
+
 
 # ============================================================
 # WORKFLOW
 # ============================================================
+
+
 
 def setup_config():
     """Setup kredensial pertama kali."""
     clear()
     header("⚙  SETUP KREDENSIAL")
     print()
-    print(f"  {C['D']}Kredensial akan disimpan di ~/.superi_config.json{C['R']}")
-    print(f"  {C['D']}Gardu Induk akan otomatis terdeteksi dari profil.{C['R']}")
+    _cprint(f"  [dim]Kredensial akan disimpan di ~/.superi_config.json[/]")
+    _cprint(f"  [dim]Gardu Induk akan otomatis terdeteksi dari profil.[/]")
     print()
 
     # --- SUPER-I APP ---
-    print(f"  {C['M']}{C['B']}1. SUPER-I APP{C['R']} {C['D']}(super-i-app.plnes.co.id){C['R']}")
-    nip = input(f"  {C['B']}NIP{C['R']}        : ").strip()
-    password = input(f"  {C['B']}Password{C['R']}   : ").strip()
+    _cprint(f"  [bold magenta][bold]1. SUPER-I APP[/] [dim](super-i-app.plnes.co.id)[/]")
+    nip = input_with_default('NIP', '')
+    password = sc.prompt_ask('Password', password=True) if sc and hasattr(sc, 'prompt_ask') else input('  Password   : ').strip()
     print()
 
     # --- Portal APD Jakarta ---
-    print(f"  {C['M']}{C['B']}2. Portal APD Jakarta{C['R']} {C['D']}(10.3.187.6/apdjakarta){C['R']}")
-    print(f"  {C['D']}Untuk sinkronisasi data. Kosongkan jika tidak dipakai.{C['R']}")
-    portal_user = input(f"  {C['B']}Username{C['R']}   : ").strip()
-    portal_password = input(f"  {C['B']}Password{C['R']}   : ").strip()
+    _cprint(f"  [bold magenta][bold]2. Portal APD Jakarta[/] [dim](10.3.187.6/apdjakarta)[/]")
+    _cprint(f"  [dim]Untuk sinkronisasi data. Kosongkan jika tidak dipakai.[/]")
+    portal_user = input_with_default('Portal Username', '')
+    portal_password = sc.prompt_ask('Portal Password', password=True) if sc and hasattr(sc, 'prompt_ask') else input('  Portal Password : ').strip()
 
     # Pertahankan config lama (gi_id, portal_url, portal_gi_id) jika ada
     config = load_config()
@@ -1248,21 +1394,21 @@ def setup_config():
 
     save_config(config)
     print()
-    print(f"  {C['G']}✓ Konfigurasi tersimpan!{C['R']}")
+    _cprint(f"  [bold green]✓ Konfigurasi tersimpan![/]")
     if portal_user and portal_password:
-        print(f"  {C['G']}✓ Portal APD siap untuk sinkronisasi{C['R']}")
+        _cprint(f"  [bold green]✓ Portal APD siap untuk sinkronisasi[/]")
     else:
-        print(f"  {C['Y']}⚠ Credentials Portal APD belum lengkap — sync tidak aktif{C['R']}")
-    input(f"  {C['D']}[Enter untuk lanjut...]{C['R']}")
+        _cprint(f"  [bold bright_yellow]⚠ Credentials Portal APD belum lengkap — sync tidak aktif[/]")
+    sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
 
 def do_login(config):
     """Login, return token, user info, dan gi_id. Handling 401 dengan petunjuk jelas."""
     nip = config.get("nip")
     password = config.get("password")
     if not nip or not password:
-        print(f"  {C['RE']}✗ Konfigurasi belum di-setup. Jalankan setup dulu.{C['R']}")
-        print(f"  {C['D']}  File: {CONFIG_FILE}{C['R']}")
-        print(f"  {C['D']}  Atau pilih [S] Setup di menu.{C['R']}")
+        _cprint(f"  [bold red]✗ Konfigurasi belum di-setup. Jalankan setup dulu.[/]")
+        _cprint(f"  [dim]  File: {CONFIG_FILE}[/]")
+        _cprint(f"  [dim]  Atau pilih [S] Setup di menu.[/]")
         return None, None, None
     
     try:
@@ -1299,18 +1445,18 @@ def do_login(config):
     except Exception as e:
         err_str = str(e)
         if "401" in err_str or "password salah" in err_str.lower() or "unauthorized" in err_str.lower() or "NIP" in err_str:
-            print(f"  {C['RE']}✗ Login gagal (401 Unauthorized):{C['R']}")
-            print(f"  {C['Y']}  Penyebab: NIP atau password di config salah / kadaluarsa{C['R']}")
-            print(f"  {C['D']}  NIP di config: {nip}{C['R']}")
-            print(f"  {C['D']}  File: {CONFIG_FILE}{C['R']}")
+            _cprint(f"  [bold red]✗ Login gagal (401 Unauthorized):[/]")
+            _cprint(f"  [bold bright_yellow]  Penyebab: NIP atau password di config salah / kadaluarsa[/]")
+            _cprint(f"  [dim]  NIP di config: {nip}[/]")
+            _cprint(f"  [dim]  File: {CONFIG_FILE}[/]")
             print()
-            print(f"  {C['B']}Solusi:{C['R']}")
-            print(f"    1. Pilih {C['C']}[S] Setup{C['R']} untuk input NIP/password baru")
+            _cprint(f"  [bold]Solusi:[/]")
+            _cprint(f"    1. Pilih [bold bright_yellow][S] Setup[/] untuk input NIP/password baru")
             print(f"    2. Atau edit manual file .superi_config.json")
             print(f"    3. Pastikan NIP tanpa spasi, password sesuai akun PLN")
             print(f"    4. Cek apakah akun masih aktif & sudah clock-in di SUPER-I")
         else:
-            print(f"  {C['RE']}✗ Login gagal: {e}{C['R']}")
+            _cprint(f"  [bold red]✗ Login gagal: {e}[/]")
         return None, None, None
 
 def show_data(token, data_type, gi_id, date_str):
@@ -1320,74 +1466,95 @@ def show_data(token, data_type, gi_id, date_str):
     items = result["data"].get("items", [])
     
     if not items:
-        print(f"  {C['Y']}Tidak ada data untuk {date_str}{C['R']}")
+        _cprint(f"  [bold bright_yellow]Tidak ada data untuk {date_str}[/]")
         return
     
     clear()
     header(f"📊 {ep['label']} · {date_str}")
-    print()
-    
-    if ui:
-        for ln in ui.render_data_view(items, data_type):
-            print(ln)
-        # Footer summary
+    if sc and getattr(sc, 'console', None):
+        try:
+            sc.console.print()
+        except Exception:
+            print()
+    else:
+        print()
+
+    if not _rich_print_table(items, data_type, date_str, kind="data"):
+        if ui:
+            for ln in ui.render_data_view(items, data_type):
+                print(ln)
+            data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
+            total_filled = sum(len(it.get(data_key, [])) for it in items)
+            total_empty = len(items) * 24 - total_filled
+            print()
+            _cprint(f"  [dim]{ui.render_data_summary(len(items), total_filled, total_empty)}[/]")
+        else:
+            for item in items:
+                nama = item.get("nama", "?")
+                data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
+                entries = item.get(data_key, [])
+                periods = sorted([e["periode"] for e in entries])
+                print(f"  [{item.get('id', '?')}] {nama} - {len(periods)}/24")
+    else:
         data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
         total_filled = sum(len(it.get(data_key, [])) for it in items)
-        total_empty = len(items) * 24 - total_filled
-        print()
-        print(f"  {C['D']}{ui.render_data_summary(len(items), total_filled, total_empty)}{C['R']}")
-    else:
-        for item in items:
-            nama = item.get("nama", "?")
-            data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
-            entries = item.get(data_key, [])
-            periods = sorted([e["periode"] for e in entries])
-            print(f"  [{item.get('id', '?')}] {nama} - {len(periods)}/24")
-    
-    print()
-    input(f"  {C['D']}[Enter untuk kembali...]{C['R']}")
+        if ui:
+            try:
+                summary_line = ui.render_data_summary(len(items), total_filled, len(items)*24-total_filled)
+                if sc and getattr(sc, 'console', None):
+                    sc.console.print(f"\n  [dim]{summary_line}[/]")
+                else:
+                    print(f"\n  {summary_line}")
+            except Exception:
+                pass
 
-def input_single(token, data_type, gi_id, date_str, user_info):
+    if sc and getattr(sc, 'console', None):
+        try:
+            sc.console.print()
+            sc.pause()
+        except Exception:
+            input("  [Enter untuk kembali...]")
+    else:
+        print()
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
+
+def input_single(token, data_type, gi_id, date_str, user_info, selected_item=None, show_header=True):
     """Input data untuk satu target spesifik."""
     ep = ENDPOINTS[data_type]
-    
-    # Ambil daftar item
-    result = api_get(token, ep["list"], {"garduIndukId": gi_id, "date": date_str})
-    items = result["data"].get("items", [])
-    
-    if not items:
-        print(f"  Tidak ada item untuk {date_str}")
-        input(f"  {C['D']}[Enter]{C['R']}")
-        return
-    
-    clear()
-    header(f"✏  INPUT {ep['label']}")
-    print()
-    
-    # Tampilkan daftar item (aligned table)
-    if ui:
-        for ln in ui.render_item_table(items, data_type):
-            print(ln)
-    else:
-        for i, item in enumerate(items, 1):
-            nama = item.get("nama", "?")
-            data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
-            periods = [e["periode"] for e in item.get(data_key, [])]
-            print(f"  [{i}] {nama} - {len(periods)}/24")
-    print()
-    
-    try:
-        idx = int(input("  Pilih nomor item: ").strip()) - 1
-        if idx < 0 or idx >= len(items):
-            print(f"  {C['RE']}✗ Pilihan tidak valid!{C['R']}")
-            input(f"  {C['D']}[Enter]{C['R']}")
+
+    if selected_item is None:
+        result = api_get(token, ep["list"], {"garduIndukId": gi_id, "date": date_str})
+        items = result["data"].get("items", [])
+        if not items:
+            print(f"  Tidak ada item untuk {date_str}")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
             return
-    except ValueError:
-        print(f"  {C['RE']}✗ Pilihan tidak valid!{C['R']}")
-        input(f"  {C['D']}[Enter]{C['R']}")
-        return
-    
-    item = items[idx]
+        if show_header:
+            clear()
+            header(f"✏  INPUT {ep['label']}")
+            print()
+        if not _rich_print_table(items, data_type, kind="item"):
+            if ui:
+                for ln in ui.render_item_table(items, data_type):
+                    print(ln)
+            else:
+                for i, item in enumerate(items, 1):
+                    nama = item.get("nama", "?")
+                    data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
+                    periods = [e["periode"] for e in item.get(data_key, [])]
+                    print(f"  [{i}] {nama} - {len(periods)}/24")
+        print()
+        try:
+            idx = int(input("  Pilih nomor item: ").strip()) - 1
+            if idx < 0 or idx >= len(items):
+                raise ValueError
+        except ValueError:
+            _cprint(f"  [bold red]✗ Pilihan tidak valid![/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
+            return
+        item = items[idx]
+    else:
+        item = selected_item
     item_id = item["id"]
     nama = item["nama"]
     
@@ -1395,7 +1562,7 @@ def input_single(token, data_type, gi_id, date_str, user_info):
     if item.get('statusCB') == 'OFF':
         print(f"\n  ⛔ {nama} CB OFF — tidak bisa input beban!")
         print("  (Circuit Breaker mati, tidak ada arus)")
-        input(f"  {C['D']}[Enter]{C['R']}")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
     
     data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
@@ -1405,22 +1572,29 @@ def input_single(token, data_type, gi_id, date_str, user_info):
     
     print(f"\n  Target: {nama} (ID:{item_id})")
 
-    # Tampilkan data existing (compact)
+    # Tampilkan data existing (compact) - Rich yellow
     if entries:
-        print(f"  {C['D']}Data existing:{C['R']}")
-        if ui:
-            for ln in ui.render_existing_data(entries, data_type):
-                print(ln)
+        if sc and getattr(sc, 'console', None):
+            try:
+                sc.console.print("  [dim]Data existing:[/]")
+            except Exception:
+                _cprint(f"  [dim]Data existing:[/]")
         else:
-            for e in sorted(entries, key=lambda x: x["periode"]):
-                if data_type == "tegangan-trafo":
-                    print(f"    P{e['periode']:02d}: HV={e['hv']}kV, MV={e['mv']}kV")
-                else:
-                    print(f"    P{e['periode']:02d}: {e['beban']}A")
+            _cprint(f"  [dim]Data existing:[/]")
+        if not _rich_print_table(entries, data_type, kind="existing"):
+            if ui:
+                for ln in ui.render_existing_data(entries, data_type):
+                    print(ln)
+            else:
+                for e in sorted(entries, key=lambda x: x["periode"]):
+                    if data_type == "tegangan-trafo":
+                        print(f"    P{e['periode']:02d}: HV={e['hv']}kV, MV={e['mv']}kV")
+                    else:
+                        print(f"    P{e['periode']:02d}: {e['beban']}A")
     
     if not empty_periods:
         print(f"\n  ✓ Semua periode sudah terisi (24/24)!")
-        input(f"  {C['D']}[Enter]{C['R']}")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
     
     print(f"\n  Periode kosong: {empty_periods}")
@@ -1429,12 +1603,12 @@ def input_single(token, data_type, gi_id, date_str, user_info):
     try:
         per = int(input("  Periode yang akan diisi: ").strip())
         if per not in empty_periods and per not in range(24):
-            print(f"  {C['RE']}✗ Periode tidak valid!{C['R']}")
-            input(f"  {C['D']}[Enter]{C['R']}")
+            _cprint(f"  [bold red]✗ Periode tidak valid![/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
             return
     except ValueError:
-        print(f"  {C['RE']}✗ Periode tidak valid!{C['R']}")
-        input(f"  {C['D']}[Enter]{C['R']}")
+        _cprint(f"  [bold red]✗ Periode tidak valid![/]")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
     
     # Input nilai dengan saran SMART (weekday/weekend, histori N hari, kelipatan 5)
@@ -1465,9 +1639,9 @@ def input_single(token, data_type, gi_id, date_str, user_info):
         smart_val, info = smart_suggest_value(token, data_type, item_id, per, date_str, gi_id=gi_id)
         if smart_val is not None:
             suggested = f" [smart: {smart_val}A]"
-            sys.stdout.write(f"\r    {C['G']}✓{C['R']} Smart suggest: {smart_val}A ({info}){' ' * 6}\n")
+            sys.stdout.write(f"\r    [bold green]✓[/] Smart suggest: {smart_val}A ({info}){' ' * 6}\n")
         else:
-            sys.stdout.write(f"\r    {C['Y']}•{C['R']} Smart suggest tidak tersedia{' ' * 6}\n")
+            sys.stdout.write(f"\r    [bold bright_yellow]•[/] Smart suggest tidak tersedia{' ' * 6}\n")
             # Fallback ke periode sebelumnya
             if entries:
                 sorted_entries = sorted(entries, key=lambda x: x["periode"])
@@ -1484,22 +1658,22 @@ def input_single(token, data_type, gi_id, date_str, user_info):
                 suggested = f" [tidak ada data]"
     
     if data_type == "tegangan-trafo":
-        mv_str = input(f"  {C['B']}{'MV (kV)':<14}{C['R']} [{suggested_mv}]: ").strip()
+        mv_str = input_with_default(f"  [bold]{'MV (kV)':<14}[/] [{suggested_mv}]: ").strip()
         mv = float(mv_str) if mv_str else float(suggested_mv)
-        hv_str = input(f"  {C['B']}{'HV (kV)':<14}{C['R']} [{suggested_hv}]: ").strip()
+        hv_str = input_with_default(f"  [bold]{'HV (kV)':<14}[/] [{suggested_hv}]: ").strip()
         hv = float(hv_str) if hv_str else float(suggested_hv)
         value = mv
         extra_values = {"hv": hv}
     else:
-        val_str = input(f"  {C['B']}{'Nilai (A)':<14}{C['R']}{suggested}: ").strip()
+        val_str = input_with_default(f"  [bold]{'Nilai (A)':<14}[/]{suggested}: ").strip()
         if not val_str and suggested:
             val_str = suggested.split(": ")[1].replace("A]", "")
         value = float(val_str)
         extra_values = {}
     
     if not confirm(f"\n  Input {nama} periode {per}: {value}{ep['unit']}?"):
-        print(f"  {C['Y']}⊘ Dibatalkan.{C['R']}")
-        input(f"  {C['D']}[Enter]{C['R']}")
+        _cprint(f"  [bold bright_yellow]⊘ Dibatalkan.[/]")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
     
     dt = datetime.strptime(date_str, "%Y-%m-%d")
@@ -1530,18 +1704,18 @@ def input_single(token, data_type, gi_id, date_str, user_info):
     if result.get("success"):
         photo_check = result.get("_photo_upload")
         if photo_check and not photo_check.get("ok"):
-            print(f"  {C['Y']}⚠ NILAI TERSIMPAN! ID: {result['data'].get('id')}, tetapi foto gagal{C['R']}")
-            print(f"  {C['RE']}✗ {photo_check.get('error')}{C['R']}")
+            _cprint(f"  [bold bright_yellow]⚠ NILAI TERSIMPAN! ID: {result['data'].get('id')}, tetapi foto gagal[/]")
+            _cprint(f"  [bold red]✗ {photo_check.get('error')}[/]")
         else:
-            print(f"  {C['G']}✓ BERHASIL! ID: {result['data'].get('id')}{C['R']}")
+            _cprint(f"  [bold green]✓ BERHASIL! ID: {result['data'].get('id')}[/]")
     else:
         msg = result.get("message", str(result))
         if isinstance(msg, list):
             msg = ", ".join(msg)
-        print(f"  {C['RE']}✗ Gagal ({status}): {msg}{C['R']}")
+        _cprint(f"  [bold red]✗ Gagal ({status}): {msg}[/]")
     
     print()
-    input(f"  {C['D']}[Enter untuk kembali...]{C['R']}")
+    sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
 
 def offer_portal_sync(data_type, periodes, date_str):
     """Tanya operator apakah mau sync ke Portal PLN setelah batch fill sukses.
@@ -1574,7 +1748,7 @@ def offer_portal_sync(data_type, periodes, date_str):
         return
     
     if not superi_sync.PORTAL_USER or not superi_sync.PORTAL_PASS:
-        print(f"  {C['RE']}✗ Credentials Portal PLN belum diset di .superi_config.json{C['R']}")
+        _cprint(f"  [bold red]✗ Credentials Portal PLN belum diset di .superi_config.json[/]")
         print("    Tambahkan: portal_user, portal_password")
         return
     
@@ -1603,17 +1777,17 @@ def sync_portal_menu(date_str):
     clear()
     header("🔄 SYNC KE PORTAL APD")
     print()
-    print(f"  {C['D']}Sumber: SUPER-I APP  →  Tujuan: Portal APD Jakarta{C['R']}")
-    print(f"  {C['D']}Tanggal: {date_str}{C['R']}")
+    _cprint(f"  [dim]Sumber: SUPER-I APP  →  Tujuan: Portal APD Jakarta[/]")
+    _cprint(f"  [dim]Tanggal: {date_str}[/]")
     print()
 
     sub_header("Pilih jenis data")
-    print(f"  {C['C']}[1]{C['R']} Beban Penyulang  (32 feeder)")
-    print(f"  {C['C']}[2]{C['R']} Beban Trafo      (3 trafo)")
-    print(f"  {C['C']}[3]{C['R']} Tegangan Trafo   (5 trafo, MV+HV)")
-    print(f"  {C['C']}[4]{C['R']} SEMUA")
-    print(f"  {C['D']}[0]{C['R']} Kembali")
-    choice = input(f"  {C['B']}Pilih ▸ {C['R']}").strip()
+    _cprint(f"  [bold bright_yellow][1][/] Beban Penyulang  (32 feeder)")
+    _cprint(f"  [bold bright_yellow][2][/] Beban Trafo      (3 trafo)")
+    _cprint(f"  [bold bright_yellow][3][/] Tegangan Trafo   (5 trafo, MV+HV)")
+    _cprint(f"  [bold bright_yellow][4][/] SEMUA")
+    _cprint(f"  [dim][0][/] Kembali")
+    choice = sc.prompt_ask('Pilih', default='0') if sc else input('  Pilih ▸ ').strip().lower()
 
     type_map = {"1": ["penyulang"], "2": ["trafo"], "3": ["tegangan"], "4": ["penyulang", "trafo", "tegangan"]}
     if choice not in type_map:
@@ -1630,8 +1804,8 @@ def sync_portal_menu(date_str):
         js = max(0, min(23, js))
         je = max(0, min(23, je))
     except ValueError:
-        print(f"  {C['RE']}✗ Format jam salah{C['R']}")
-        input(f"  {C['D']}[Enter]{C['R']}")
+        _cprint(f"  [bold red]✗ Format jam salah[/]")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
 
     date_input = input_with_default("Tanggal", date_str)
@@ -1640,13 +1814,13 @@ def sync_portal_menu(date_str):
     try:
         import superi_sync
     except ImportError as e:
-        print(f"  {C['RE']}✗ Modul superi_sync tidak ditemukan: {e}{C['R']}")
-        input(f"  {C['D']}[Enter]{C['R']}")
+        _cprint(f"  [bold red]✗ Modul superi_sync tidak ditemukan: {e}[/]")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
     if not superi_sync.PORTAL_USER or not superi_sync.PORTAL_PASS:
-        print(f"  {C['RE']}✗ Credentials Portal APD belum diset di .superi_config.json{C['R']}")
-        print(f"  {C['D']}  Setup via menu [S]{C['R']}")
-        input(f"  {C['D']}[Enter]{C['R']}")
+        _cprint(f"  [bold red]✗ Credentials Portal APD belum diset di .superi_config.json[/]")
+        _cprint(f"  [dim]  Setup via menu [S][/]")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
 
     # Dry-run preview
@@ -1656,9 +1830,9 @@ def sync_portal_menu(date_str):
     print()
 
     # Konfirmasi live
-    if not confirm(f"{C['Y']}Lanjut LIVE SYNC?{C['R']}"):
-        print(f"  {C['Y']}⊘ Dibatalkan — bisa di-sync nanti{C['R']}")
-        input(f"  {C['D']}[Enter]{C['R']}")
+    if not confirm(f"[bold bright_yellow]Lanjut LIVE SYNC?[/]"):
+        _cprint(f"  [bold bright_yellow]⊘ Dibatalkan — bisa di-sync nanti[/]")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
 
     sub_header("LIVE SYNC")
@@ -1669,10 +1843,10 @@ def sync_portal_menu(date_str):
             all_ok = False
     print()
     if all_ok:
-        print(f"  {C['G']}✓ Sync ke Portal APD selesai{C['R']}")
+        _cprint(f"  [bold green]✓ Sync ke Portal APD selesai[/]")
     else:
-        print(f"  {C['Y']}⚠ Sebagian sync gagal — cek detail di atas{C['R']}")
-    input(f"  {C['D']}[Enter untuk kembali...]{C['R']}")
+        _cprint(f"  [bold bright_yellow]⚠ Sebagian sync gagal — cek detail di atas[/]")
+    sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
 
 def batch_fill(token, data_type, gi_id, date_str, user_info):
     """Isi semua periode kosong untuk satu item."""
@@ -1685,18 +1859,29 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
     header(f"⚡ BATCH FILL · {ep['label']}")
     print()
     
-    if ui:
-        for ln in ui.render_item_table(items, data_type):
-            print(ln)
-    else:
-        for i, item in enumerate(items, 1):
-            data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
-            periods = [e["periode"] for e in item.get(data_key, [])]
-            print(f"  [{i}] {item['nama']} - {len(periods)}/24")
+    if not _rich_print_table(items, data_type, kind="item"):
+        if ui:
+            for ln in ui.render_item_table(items, data_type):
+                print(ln)
+        else:
+            for i, item in enumerate(items, 1):
+                data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
+                periods = [e["periode"] for e in item.get(data_key, [])]
+                print(f"  [{i}] {item['nama']} - {len(periods)}/24")
 
-    print()
+    if sc and getattr(sc, 'console', None):
+        try:
+            sc.console.print()
+        except Exception:
+            print()
+    else:
+        print()
     try:
-        idx = int(input("  Pilih nomor item: ").strip()) - 1
+        if sc is not None:
+            idx_str = sc.prompt_ask("Pilih nomor item")
+            idx = int(idx_str) - 1
+        else:
+            idx = int(input("  Pilih nomor item: ").strip()) - 1
         if idx < 0 or idx >= len(items):
             return
     except ValueError:
@@ -1707,7 +1892,7 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
     # Tolak CB OFF
     if item.get('statusCB') == 'OFF':
         print(f"\n  ⛔ {item['nama']} CB OFF — tidak bisa input beban!")
-        input(f"  {C['D']}[Enter]{C['R']}")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
     
     data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
@@ -1717,7 +1902,7 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
     
     if not empty_periods:
         print(f"\n  ✓ {item['nama']} sudah 24/24!")
-        input(f"  {C['D']}[Enter]{C['R']}")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
     
     # Hitung nilai dari periode terisi tertinggi (suggest value)
@@ -1775,8 +1960,8 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
         # Filter valid
         valid_periods = [p for p in empty_periods if teg_suggestions[p][0] is not None]
         if not valid_periods:
-            print(f"  {C['RE']}✗ Tidak ada nilai valid!{C['R']}")
-            input(f"  {C['D']}[Enter]{C['R']}")
+            _cprint(f"  [bold red]✗ Tidak ada nilai valid![/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
             return
         
         if not confirm(f"\n  Isi {len(valid_periods)} periode tegangan {item['nama']}?"):
@@ -1838,9 +2023,17 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
                 ok = False
             else:
                 detail = f"MV={mv} HV={hv}{foto_log}" if ok else str(result.get("message", "?"))[:30]
-            if ui:
-                sys.stdout.write("\r" + ui.fmt_progress_line(i, total, f"P{per:02d}", ok=ok, detail=detail))
-                sys.stdout.flush()
+            if sc and getattr(sc, 'console', None) and getattr(sc, 'RICH_AVAILABLE', False):
+                try:
+                    sc.console.print(f"  [{'green' if ok else 'red'}]{'[OK]' if ok else '[FAIL]' } P{per:02d} {detail[:60]}[/]")
+                except Exception:
+                    if ui:
+                        sys.stdout.write("\r" + ui.fmt_progress_line(i, total, f"P{per:02d}", ok=ok, detail=detail))
+                        sys.stdout.flush()
+            else:
+                if ui:
+                    sys.stdout.write("\r" + ui.fmt_progress_line(i, total, f"P{per:02d}", ok=ok, detail=detail))
+                    sys.stdout.flush()
             if ok:
                 success += 1
             else:
@@ -1850,14 +2043,13 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
         if ui:
             sys.stdout.write("\n")
         print()
-        print(ui.render_summary_box(success, fail, total, "tegangan") if ui
-              else f"  ✓ {success}/{total} berhasil!")
+        _print_summary_rich(success, fail, total, "tegangan")
         
         # Tawarkan sync ke Portal PLN
         if success > 0:
             offer_portal_sync(data_type, valid_periods, date_str)
         
-        input(f"  {C['D']}[Enter]{C['R']}")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
     else:
         # Beban: SMART SUGGEST untuk satu nilai yang dipakai di semua periode kosong
@@ -1929,14 +2121,13 @@ def batch_fill(token, data_type, gi_id, date_str, user_info):
     if ui:
         sys.stdout.write("\n")
     print()
-    print(ui.render_summary_box(success, fail, total, "beban") if ui
-          else f"  ✓ {success}/{total} berhasil!")
+    _print_summary_rich(success, fail, total, "beban")
     
     # Tawarkan sync ke Portal PLN
     if success > 0:
         offer_portal_sync(data_type, empty_periods, date_str)
     
-    input(f"  {C['D']}[Enter]{C['R']}")
+    sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
 
 # ============================================================
 # MAIN MENU
@@ -1957,7 +2148,7 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     items = result.get("data", {}).get("items", [])
     if not items:
         print("  Tidak ada data.")
-        input(f"  {C['D']}[Enter]{C['R']}")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
     
     # Hitung item kosong per periode
@@ -1974,27 +2165,35 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
                 empty_items.append(it)
         empty_by_periode[p] = empty_items
     
-    # Tampilkan grid periode (hanya yang masih kosong)
+    # Tampilkan grid periode (hanya yang masih kosong) - Rich yellow
     empty_periods_list = [p for p in range(24) if empty_by_periode[p]]
     full_count = 24 - len(empty_periods_list)
-    print(f"\n  {C['D']}Periode kosong ({len(empty_periods_list)} jam) — {full_count} jam sudah penuh{C['R']}")
-    if empty_periods_list:
-        print("  " + "─" * 40)
-        for p in empty_periods_list:
-            count = len(empty_by_periode[p])
-            print(f"  P{p:02d}:00  | {count:3d} item | ⚡ Bisa batch")
+    if sc and getattr(sc, 'console', None):
+        sc.console.print(f"\n  [dim]Periode kosong ({len(empty_periods_list)} jam) — {full_count} jam sudah penuh[/]")
+        if empty_periods_list:
+            sc.console.print(f"  [dim]{'─' * 40}[/]")
+            for p in empty_periods_list:
+                cnt = len(empty_by_periode[p])
+                sc.console.print(f"  [bold bright_yellow]P{p:02d}:00[/]  | {cnt:3d} item | ⚡ Bisa batch")
+    else:
+        _cprint(f"\n  [dim]Periode kosong ({len(empty_periods_list)} jam) — {full_count} jam sudah penuh[/]")
+        if empty_periods_list:
+            print("  " + "─" * 40)
+            for p in empty_periods_list:
+                count = len(empty_by_periode[p])
+                print(f"  P{p:02d}:00  | {count:3d} item | ⚡ Bisa batch")
 
     if not empty_periods_list:
-        print(f"\n  {C['G']}✓ Semua periode sudah penuh!{C['R']}")
-        input(f"  {C['D']}[Enter]{C['R']}")
+        _cprint(f"\n  [bold green]✓ Semua periode sudah penuh![/]")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
     
     # Pilih periode
     try:
         per = int(input("\n  Pilih periode (jam): ").strip())
         if per < 0 or per > 23:
-            print(f"  {C['RE']}✗ Periode harus 0-23!{C['R']}")
-            input(f"  {C['D']}[Enter]{C['R']}")
+            _cprint(f"  [bold red]✗ Periode harus 0-23![/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
             return
     except ValueError:
         return
@@ -2002,7 +2201,7 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     empty_items = empty_by_periode[per]
     if not empty_items:
         print(f"\n  ✓ Periode P{per:02d} sudah penuh!")
-        input(f"  {C['D']}[Enter]{C['R']}")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
     
     print(f"\n  ⚡ Periode P{per:02d}:00 — {len(empty_items)} item kosong")
@@ -2042,17 +2241,23 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
             else:
                 suggest_rows.append((i, it["nama"], "?A", "(tidak ada data)"))
 
-    print()
-    if ui:
-        for ln in ui.render_suggest_table(suggest_rows):
-            print(ln)
+    if sc and getattr(sc, 'console', None):
+        try:
+            sc.console.print()
+        except Exception:
+            print()
     else:
-        print(f"  {'No':<4}{'Nama':<18}{'Suggest':<14}Info")
-        for no, nama, val, info in suggest_rows:
-            print(f"  {no:<4}{str(nama)[:18]:<18}{val:<14}{info}")
+        print()
+    _get_suggestion_table_rows_for_display(suggest_rows)
     
     # Konfirmasi / edit
-    print(f"\n  {'─' * 55}")
+    if sc and getattr(sc, 'console', None):
+        try:
+            sc.console.print(f"\n  [dim]{'─' * 55}[/]")
+        except Exception:
+            print(f"\n  {'─' * 55}")
+    else:
+        print(f"\n  {'─' * 55}")
     
     if data_type == "tegangan-trafo":
         edit = input("  Edit nilai? (y/N): ").strip().lower()
@@ -2088,13 +2293,13 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
             valid_items.append(it)
     
     if not valid_items:
-        print(f"  {C['RE']}✗ Tidak ada item dengan nilai valid!{C['R']}")
-        input(f"  {C['D']}[Enter]{C['R']}")
+        _cprint(f"  [bold red]✗ Tidak ada item dengan nilai valid![/]")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
     
     if not confirm(f"\n  Input {len(valid_items)} item di periode P{per:02d}?"):
-        print(f"  {C['Y']}⊘ Dibatalkan.{C['R']}")
-        input(f"  {C['D']}[Enter]{C['R']}")
+        _cprint(f"  [bold bright_yellow]⊘ Dibatalkan.[/]")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         return
     
     # Reset tracker foto agar gap 10-20s antar item dalam periode yang sama berlaku
@@ -2178,9 +2383,17 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
             failures.append((it["nama"], str(e)[:30]))
             detail = str(e)[:30]
 
-        if ui:
-            sys.stdout.write("\r" + ui.fmt_progress_line(i, total, it["nama"][:10], ok=ok, detail=detail))
-            sys.stdout.flush()
+        if sc and getattr(sc, 'console', None) and getattr(sc, 'RICH_AVAILABLE', False):
+            try:
+                sc.console.print(f"  [{'green' if ok else 'red'}]{it['nama'][:12]} {'OK' if ok else 'FAIL'} {detail[:50]}[/]")
+            except Exception:
+                if ui:
+                    sys.stdout.write("\r" + ui.fmt_progress_line(i, total, it["nama"][:10], ok=ok, detail=detail))
+                    sys.stdout.flush()
+        else:
+            if ui:
+                sys.stdout.write("\r" + ui.fmt_progress_line(i, total, it["nama"][:10], ok=ok, detail=detail))
+                sys.stdout.flush()
         if ok:
             success += 1
         else:
@@ -2191,17 +2404,22 @@ def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
         sys.stdout.write("\n")
 
     for nama, reason in failures:
-        print(f"  {C['RE']}✗ {nama}: {reason}{C['R']}")
+        _cprint(f"  [bold red]✗ {nama}: {reason}[/]")
 
     print()
-    print(ui.render_summary_box(success, fail, total, ep["label"]) if ui
-          else f"\n  Ringkasan: ✓ {success} berhasil" + (f"  ✗ {fail} gagal" if fail else ""))
+    _print_summary_rich(success, fail, total, ep["label"])
     
     # Tawarkan sync ke Portal PLN (periode tunggal: per)
     if success > 0:
         offer_portal_sync(data_type, [per], date_str)
     
-    input(f"  {C['D']}[Enter]{C['R']}")
+    if sc:
+        try:
+            sc.pause()
+        except Exception:
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
+    else:
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
 
 CRON_MARKER = "# SUPER-I-AUTO"
 WIN_TASK_PREFIX = "SUPER-I-Auto"
@@ -2290,7 +2508,7 @@ def cron_is_installed():
         return False
 
 
-def cron_install(window_start=None, window_end=None):
+def cron_install(window_start=None, window_end=None, planned_lines=None):
     """Pasang N cron job random (macOS/Linux). N = jumlah jam window."""
     try:
         result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
@@ -2298,7 +2516,7 @@ def cron_install(window_start=None, window_end=None):
         # Hapus semua baris lama SUPER-I-AUTO
         lines = [l for l in existing.splitlines() if CRON_MARKER not in l]
         # Generate baru N baris sesuai window
-        new_lines = _generate_cron_lines(window_start, window_end)
+        new_lines = list(planned_lines) if planned_lines is not None else _generate_cron_lines(window_start, window_end)
         lines.extend(new_lines)
         new_crontab = "\n".join(lines) + "\n"
         proc = subprocess.run(["crontab", "-"], input=new_crontab, text=True, capture_output=True)
@@ -2406,12 +2624,12 @@ def win_task_count_installed():
     return count
 
 
-def win_task_install(window_start=None, window_end=None):
+def win_task_install(window_start=None, window_end=None, planned_tasks=None):
     """Pasang N Windows Task Scheduler, tiap jam beda menit random 3-38 (anti-robotik)."""
     bat = os.path.join(SCRIPT_DIR, "superi.bat")
     task_log = os.path.join(SCRIPT_DIR, "auto_task_log.txt")
     task_cmd = f'cmd /c cd /d "{SCRIPT_DIR}" && "{bat}" auto >> "{task_log}" 2>&1'
-    tasks = _generate_win_tasks(window_start, window_end)
+    tasks = list(planned_tasks) if planned_tasks is not None else _generate_win_tasks(window_start, window_end)
     ok_count = 0
     last_msg = ""
     for task_name, h, m in tasks:
@@ -2487,85 +2705,85 @@ def scheduler_install_menu():
     clear()
     header(f"⚙  JADWAL OTOMATIS · {os_name}")
     print()
-    print(f"  {C['D']}Window saat ini: {win_start:02d}:00-{win_end:02d}:00 = {len(hours)} jam ({', '.join(f'{h:02d}' for h in hours)}){C['R']}")
-    print(f"  {C['D']}Setiap jam dapat menit random 3-38 (anti menit 5 exact robot) + jitter 2-110 detik{C['R']}")
-    print(f"  {C['D']}Jaminan: menit max 38 + jitter 110s + runtime 5 menit = selesai max 44, sisa 15 menit buffer{C['R']}")
+    _cprint(f"  [dim]Window saat ini: {win_start:02d}:00-{win_end:02d}:00 = {len(hours)} jam ({', '.join(f'{h:02d}' for h in hours)})[/]")
+    _cprint(f"  [dim]Setiap jam dapat menit random 3-38 (anti menit 5 exact robot) + jitter 2-110 detik[/]")
+    _cprint(f"  [dim]Jaminan: menit max 38 + jitter 110s + runtime 5 menit = selesai max 44, sisa 15 menit buffer[/]")
     print()
     if installed:
         cnt = win_task_count_installed() if is_win else cron_count_installed()
-        print(f"  {C['G']}● Jadwal otomatis SUDAH terpasang ({cnt} jadwal){C['R']}")
+        _cprint(f"  [bold green]● Jadwal otomatis SUDAH terpasang ({cnt} jadwal)[/]")
         if is_win:
-            print(f"  {C['D']}N task: {WIN_TASK_PREFIX}-HH (HH={', '.join(f'{h:02d}' for h in hours)}) daily HH:MM random{C['R']}")
+            _cprint(f"  [dim]N task: {WIN_TASK_PREFIX}-HH (HH={', '.join(f'{h:02d}' for h in hours)}) daily HH:MM random[/]")
         else:
-            print(f"  {C['D']}N baris cron sesuai window, tiap jam menit random 3-38{C['R']}")
+            _cprint(f"  [dim]N baris cron sesuai window, tiap jam menit random 3-38[/]")
     else:
-        print(f"  {C['RE']}○ Jadwal otomatis BELUM terpasang{C['R']}")
+        _cprint(f"  [bold red]○ Jadwal otomatis BELUM terpasang[/]")
     print()
-    print(f"  {C['C']}[1]{C['R']} {'Pasang ulang (regenerate menit random)' if installed else 'Pasang'} jadwal otomatis ({len(hours)} jadwal)")
+    _cprint(f"  [bold bright_yellow][1][/] {'Pasang ulang (regenerate menit random)' if installed else 'Pasang'} jadwal otomatis ({len(hours)} jadwal)")
     if installed:
-        print(f"  {C['C']}[2]{C['R']} {C['RE']}Hapus{C['R']} jadwal otomatis")
+        _cprint(f"  [bold bright_yellow][2][/] [bold red]Hapus[/] jadwal otomatis")
         if is_win:
-            print(f"  {C['C']}[3]{C['R']} 📋 Lihat daftar task terpasang")
+            _cprint(f"  [bold bright_yellow][3][/] 📋 Lihat daftar task terpasang")
         else:
-            print(f"  {C['C']}[3]{C['R']} 📋 Lihat crontab terpasang")
-    print(f"  {C['RE']}[0]{C['R']} Kembali")
+            _cprint(f"  [bold bright_yellow][3][/] 📋 Lihat crontab terpasang")
+    _cprint(f"  [bold red][0][/] Kembali")
     print()
-    print(f"  {C['D']}{'─' * 56}{C['R']}")
-    choice = input(f"  {C['B']}Pilih ▸ {C['R']}").strip()
+    _cprint(f"  [dim]{'─' * 56}[/]")
+    choice = sc.prompt_ask('Pilih', default='0') if sc else input('  Pilih ▸ ').strip().lower()
     
     if choice == '1':
-        print(f"\n  {C['Y']}Memasang {len(hours)} jadwal (menit random 3-38, window {win_start:02d}-{win_end:02d})...{C['R']}")
+        _cprint(f"\n  [bold bright_yellow]Memasang {len(hours)} jadwal (menit random 3-38, window {win_start:02d}-{win_end:02d})...[/]")
         # Preview yang akan dipasang
         preview_lines = _generate_cron_lines(win_start, win_end) if not is_win else []
         preview_tasks = _generate_win_tasks(win_start, win_end) if is_win else []
         if is_win:
             for t_name, h, m in preview_tasks:
-                print(f"  {C['D']}  {t_name} -> {h:02d}:{m:02d} daily{C['R']}")
+                _cprint(f"  [dim]  {t_name} -> {h:02d}:{m:02d} daily[/]")
         else:
             for line in preview_lines:
                 # tampilkan M H
                 parts = line.split()
-                print(f"  {C['D']}  {parts[0]} {parts[1]} * * * auto (menit {parts[0]} jam {parts[1]}){C['R']}")
+                _cprint(f"  [dim]  {parts[0]} {parts[1]} * * * auto (menit {parts[0]} jam {parts[1]})[/]")
         print()
         if is_win:
             ok, msg = win_task_install(win_start, win_end)
         else:
             ok, msg = cron_install(win_start, win_end)
         if ok:
-            print(f"  {C['G']}✓ Jadwal otomatis terpasang! {msg}{C['R']}")
-            print(f"  {C['D']}Menit acak 3-38 per jam, tiap install beda-beda (mirip setting manual operator).{C['R']}")
-            print(f"  {C['D']}Pastikan Auto Mode AKTIF + komputer menyala di window jam.{C['R']}")
+            _cprint(f"  [bold green]✓ Jadwal otomatis terpasang! {msg}[/]")
+            _cprint(f"  [dim]Menit acak 3-38 per jam, tiap install beda-beda (mirip setting manual operator).[/]")
+            _cprint(f"  [dim]Pastikan Auto Mode AKTIF + komputer menyala di window jam.[/]")
             if is_win:
-                print(f"  {C['D']}Log Task: {os.path.join(SCRIPT_DIR, 'auto_task_log.txt')}{C['R']}")
+                _cprint(f"  [dim]Log Task: {os.path.join(SCRIPT_DIR, 'auto_task_log.txt')}[/]")
             else:
-                print(f"  {C['D']}Cek: crontab -l{C['R']}")
+                _cprint(f"  [dim]Cek: crontab -l[/]")
         else:
-            print(f"  {C['RE']}✗ Gagal: {msg}{C['R']}")
+            _cprint(f"  [bold red]✗ Gagal: {msg}[/]")
             if not is_win:
-                print(f"  {C['D']}Di macOS, Terminal mungkin perlu izin 'Full Disk Access' di System Settings.{C['R']}")
-        input(f"\n  {C['D']}[Enter]{C['R']}")
+                _cprint(f"  [dim]Di macOS, Terminal mungkin perlu izin 'Full Disk Access' di System Settings.[/]")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
     elif choice == '2' and installed:
-        print(f"\n  {C['Y']}Menghapus jadwal...{C['R']}")
+        _cprint(f"\n  [bold bright_yellow]Menghapus jadwal...[/]")
         if is_win:
             ok, msg = win_task_uninstall()
         else:
             ok, msg = cron_uninstall()
         if ok:
-            print(f"  {C['G']}✓ {msg}{C['R']}")
+            _cprint(f"  [bold green]✓ {msg}[/]")
         else:
-            print(f"  {C['RE']}✗ Gagal: {msg}{C['R']}")
-        input(f"\n  {C['D']}[Enter]{C['R']}")
+            _cprint(f"  [bold red]✗ Gagal: {msg}[/]")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
     elif choice == '3' and installed:
         print()
         if is_win:
-            print(f"  {C['B']}Daftar task terpasang:{C['R']}")
+            _cprint(f"  [bold]Daftar task terpasang:[/]")
             for h in range(24):
                 task_name = f"{WIN_TASK_PREFIX}-{h:02d}"
                 try:
                     r = subprocess.run(["schtasks", "/query", "/tn", task_name, "/fo", "list", "/v"],
                                        capture_output=True, text=True)
                     if r.returncode == 0:
-                        print(f"  {C['G']}● {task_name}{C['R']}")
+                        _cprint(f"  [bold green]● {task_name}[/]")
                         for line in r.stdout.splitlines()[:8]:
                             print(f"    {line}")
                 except Exception:
@@ -2575,20 +2793,20 @@ def scheduler_install_menu():
                 r = subprocess.run(["schtasks", "/query", "/tn", WIN_TASK_NAME, "/fo", "list"],
                                    capture_output=True, text=True)
                 if r.returncode == 0:
-                    print(f"  {C['Y']}⚠ Legacy masih ada: {WIN_TASK_NAME}{C['R']}")
+                    _cprint(f"  [bold bright_yellow]⚠ Legacy masih ada: {WIN_TASK_NAME}[/]")
             except Exception:
                 pass
         else:
-            print(f"  {C['B']}Crontab terpasang:{C['R']}")
+            _cprint(f"  [bold]Crontab terpasang:[/]")
             try:
                 r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
                 for line in r.stdout.splitlines():
                     if CRON_MARKER in line or "superi_auto" in line:
-                        marker = f"{C['G']}●{C['R']}" if CRON_MARKER in line else f"{C['Y']}○{C['R']}"
+                        marker = f"[bold green]●[/]" if CRON_MARKER in line else f"[bold bright_yellow]○[/]"
                         print(f"  {marker} {line}")
             except Exception as e:
-                print(f"  {C['RE']}✗ {e}{C['R']}")
-        input(f"\n  {C['D']}[Enter]{C['R']}")
+                _cprint(f"  [bold red]✗ {e}[/]")
+        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
 
 def auto_mode_menu():
     """Menu pengaturan Auto Mode (input + sync terjadwal)."""
@@ -2605,40 +2823,40 @@ def auto_mode_menu():
         retry_delay = cfg.get("auto_retry_delay", 10)
         
         print()
-        print(f"  {C['D']}┌─────────────────────────────────────────────────────┐{C['R']}")
+        _cprint(f"  [dim]┌─────────────────────────────────────────────────────┐[/]")
         if enabled:
-            print(f"  {C['D']}│{C['R']}  {C['G']}● AKTIF{C['R']}  {C['D']}— terjadwal otomatis di window jam{C['R']}")
+            _cprint(f"  [dim]│[/]  [bold green]● AKTIF[/]  [dim]— terjadwal otomatis di window jam[/]")
         else:
-            print(f"  {C['D']}│{C['R']}  {C['RE']}○ NONAKTIF{C['R']}  {C['D']}— tidak akan jalan walau cron memanggil{C['R']}")
-        print(f"  {C['D']}│{C['R']}  ⏱  Window     : {win_start:02d}:00 - {win_end:02d}:00")
-        print(f"  {C['D']}│{C['R']}  📋 Tipe       : {', '.join(types)}")
-        print(f"  {C['D']}│{C['R']}  🔄 Sync Portal: {'YES' if sync_portal else 'NO'}")
-        print(f"  {C['D']}│{C['R']}  🛡  Retry Guard: {retry_attempts}x, jeda {retry_delay}s")
-        print(f"  {C['D']}└─────────────────────────────────────────────────────┘{C['R']}")
+            _cprint(f"  [dim]│[/]  [bold red]○ NONAKTIF[/]  [dim]— tidak akan jalan walau cron memanggil[/]")
+        _cprint(f"  [dim]│[/]  ⏱  Window     : {win_start:02d}:00 - {win_end:02d}:00")
+        _cprint(f"  [dim]│[/]  📋 Tipe       : {', '.join(types)}")
+        _cprint(f"  [dim]│[/]  🔄 Sync Portal: {'YES' if sync_portal else 'NO'}")
+        _cprint(f"  [dim]│[/]  🛡  Retry Guard: {retry_attempts}x, jeda {retry_delay}s")
+        _cprint(f"  [dim]└─────────────────────────────────────────────────────┘[/]")
         print()
         
-        print(f"  {C['M']}{C['B']}AKSI{C['R']}")
+        _cprint(f"  [bold magenta][bold]AKSI[/]")
         if enabled:
-            print(f"  {C['C']}[1]{C['R']} {C['RE']}Nonaktifkan{C['R']} Auto Mode")
+            _cprint(f"  [bold bright_yellow][1][/] [bold red]Nonaktifkan[/] Auto Mode")
         else:
-            print(f"  {C['C']}[1]{C['R']} {C['G']}Aktifkan{C['R']} Auto Mode")
-        print(f"  {C['C']}[2]{C['R']} Atur Window Jam (mulai-akhir)")
-        print(f"  {C['C']}[3]{C['R']} Pilih Tipe Data")
-        print(f"  {C['C']}[4]{C['R']} Toggle Sync Portal APD ({'ON' if sync_portal else 'OFF'})")
-        print(f"  {C['C']}[5]{C['R']} 🧪 Test Sekarang (dry-run jam ini)")
-        print(f"  {C['C']}[6]{C['R']} 📜 Lihat Log Aktivitas")
+            _cprint(f"  [bold bright_yellow][1][/] [bold green]Aktifkan[/] Auto Mode")
+        _cprint(f"  [bold bright_yellow][2][/] Atur Window Jam (mulai-akhir)")
+        _cprint(f"  [bold bright_yellow][3][/] Pilih Tipe Data")
+        _cprint(f"  [bold bright_yellow][4][/] Toggle Sync Portal APD ({'ON' if sync_portal else 'OFF'})")
+        _cprint(f"  [bold bright_yellow][5][/] 🧪 Test Sekarang (dry-run jam ini)")
+        _cprint(f"  [bold bright_yellow][6][/] 📜 Lihat Log Aktivitas")
         print()
-        print(f"  {C['M']}{C['B']}SETUP TERJADWAL{C['R']}")
+        _cprint(f"  [bold magenta][bold]SETUP TERJADWAL[/]")
         _sched_on = scheduler_is_installed()
-        _sched_badge = f"{C['G']}TERPASANG{C['R']}" if _sched_on else f"{C['RE']}BELUM{C['R']}"
-        print(f"  {C['C']}[7]{C['R']} ⚙  Pasang/Hapus Jadwal Otomatis [{_sched_badge}]")
-        print(f"  {C['C']}[8]{C['R']} 📖 Panduan manual cron / Task Scheduler")
+        _sched_badge = f"[bold green]TERPASANG[/]" if _sched_on else f"[bold red]BELUM[/]"
+        _cprint(f"  [bold bright_yellow][7][/] ⚙  Pasang/Hapus Jadwal Otomatis [{_sched_badge}]")
+        _cprint(f"  [bold bright_yellow][8][/] 📖 Panduan manual cron / Task Scheduler")
         print()
-        print(f"  {C['RE']}[0]{C['R']} Kembali ke menu utama")
+        _cprint(f"  [bold red][0][/] Kembali ke menu utama")
         print()
-        print(f"  {C['D']}{'─' * 56}{C['R']}")
+        _cprint(f"  [dim]{'─' * 56}[/]")
         
-        choice = input(f"  {C['B']}Pilih ▸ {C['R']}").strip()
+        choice = sc.prompt_ask('Pilih', default='0') if sc else input('  Pilih ▸ ').strip().lower()
         
         if choice == '0':
             return
@@ -2651,15 +2869,15 @@ def auto_mode_menu():
             cfg.setdefault("auto_retry_attempts", 5)
             cfg.setdefault("auto_retry_delay", 10)
             save_config(cfg)
-            status = f"{C['G']}AKTIF{C['R']}" if cfg["auto_enabled"] else f"{C['RE']}NONAKTIF{C['R']}"
+            status = f"[bold green]AKTIF[/]" if cfg["auto_enabled"] else f"[bold red]NONAKTIF[/]"
             print(f"\n  ✓ Auto Mode sekarang {status}")
-            input(f"  {C['D']}[Enter]{C['R']}")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         elif choice == '2':
             print()
-            print(f"  {C['D']}Window jam = rentang waktu auto mode aktif{C['R']}")
-            print(f"  {C['D']}Contoh: 22-5 = jalan jam 22:00 sampai 05:00 (lintas hari){C['R']}")
-            print(f"  {C['D']}Sekarang: {win_start:02d}:00-{win_end:02d}:00 = {len(_expand_window_to_hours(win_start, win_end))} jam aktif{C['R']}")
-            print(f"  {C['D']}Setelah ganti window, jadwal cron/task yang sudah terpasang harus dipasang ulang biar ngikut jam baru{C['R']}")
+            _cprint(f"  [dim]Window jam = rentang waktu auto mode aktif[/]")
+            _cprint(f"  [dim]Contoh: 22-5 = jalan jam 22:00 sampai 05:00 (lintas hari)[/]")
+            _cprint(f"  [dim]Sekarang: {win_start:02d}:00-{win_end:02d}:00 = {len(_expand_window_to_hours(win_start, win_end))} jam aktif[/]")
+            _cprint(f"  [dim]Setelah ganti window, jadwal cron/task yang sudah terpasang harus dipasang ulang biar ngikut jam baru[/]")
             try:
                 s = int(input(f"  Mulai (jam 0-23) [{win_start}]: ").strip() or win_start)
                 e = int(input(f"  Akhir (jam 0-23) [{win_end}]: ").strip() or win_end)
@@ -2669,55 +2887,55 @@ def auto_mode_menu():
                     cfg["auto_window_start"] = s
                     cfg["auto_window_end"] = e
                     save_config(cfg)
-                    print(f"\n  {C['G']}✓ Window: {s:02d}:00 - {e:02d}:00 = {len(new_hours)} jam ({', '.join(f'{h:02d}' for h in new_hours)}){C['R']}")
+                    _cprint(f"\n  [bold green]✓ Window: {s:02d}:00 - {e:02d}:00 = {len(new_hours)} jam ({', '.join(f'{h:02d}' for h in new_hours)})[/]")
                     # Jika jadwal sudah terpasang dan window berubah, tawarkan reinstall
                     if scheduler_is_installed() and old_hours != new_hours:
-                        print(f"  {C['Y']}Jadwal lama {len(old_hours)} jadwal, baru {len(new_hours)} jadwal. Perlu pasang ulang biar ngikut jam baru.{C['R']}")
+                        _cprint(f"  [bold bright_yellow]Jadwal lama {len(old_hours)} jadwal, baru {len(new_hours)} jadwal. Perlu pasang ulang biar ngikut jam baru.[/]")
                         ans = input(f"  Pasang ulang jadwal sekarang? (Y/n): ").strip().lower()
                         if ans in ("", "y", "yes"):
                             is_win = platform.system() == "Windows"
-                            print(f"  {C['Y']}Memasang ulang...{C['R']}")
+                            _cprint(f"  [bold bright_yellow]Memasang ulang...[/]")
                             if is_win:
                                 ok, msg = win_task_install(s, e)
                             else:
                                 ok, msg = cron_install(s, e)
                             if ok:
-                                print(f"  {C['G']}✓ Jadwal terpasang ulang: {msg}{C['R']}")
+                                _cprint(f"  [bold green]✓ Jadwal terpasang ulang: {msg}[/]")
                             else:
-                                print(f"  {C['RE']}✗ Gagal pasang ulang: {msg}{C['R']}")
+                                _cprint(f"  [bold red]✗ Gagal pasang ulang: {msg}[/]")
                 else:
-                    print(f"\n  {C['RE']}✗ Jam harus 0-23{C['R']}")
+                    _cprint(f"\n  [bold red]✗ Jam harus 0-23[/]")
             except ValueError:
-                print(f"\n  {C['RE']}✗ Input tidak valid{C['R']}")
-            input(f"  {C['D']}[Enter]{C['R']}")
+                _cprint(f"\n  [bold red]✗ Input tidak valid[/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         elif choice == '3':
             print()
-            print(f"  {C['D']}Pilih tipe data yang akan di-input otomatis (pisah dengan koma){C['R']}")
-            print(f"  {C['D']}Contoh: penyulang,trafo,tegangan{C['R']}")
+            _cprint(f"  [dim]Pilih tipe data yang akan di-input otomatis (pisah dengan koma)[/]")
+            _cprint(f"  [dim]Contoh: penyulang,trafo,tegangan[/]")
             current = ",".join(types)
             new_types = input(f"  Tipe [{current}]: ").strip() or current
             valid = [t.strip() for t in new_types.split(",") if t.strip() in ["penyulang", "trafo", "tegangan"]]
             if valid:
                 cfg["auto_types"] = valid
                 save_config(cfg)
-                print(f"\n  {C['G']}✓ Tipe diset: {', '.join(valid)}{C['R']}")
+                _cprint(f"\n  [bold green]✓ Tipe diset: {', '.join(valid)}[/]")
             else:
-                print(f"\n  {C['RE']}✗ Tidak ada tipe valid{C['R']}")
-            input(f"  {C['D']}[Enter]{C['R']}")
+                _cprint(f"\n  [bold red]✗ Tidak ada tipe valid[/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         elif choice == '4':
             cfg["auto_sync_portal"] = not sync_portal
             save_config(cfg)
-            status = f"{C['G']}ON{C['R']}" if cfg["auto_sync_portal"] else f"{C['RE']}OFF{C['R']}"
+            status = f"[bold green]ON[/]" if cfg["auto_sync_portal"] else f"[bold red]OFF[/]"
             print(f"\n  ✓ Sync Portal: {status}")
-            input(f"  {C['D']}[Enter]{C['R']}")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         elif choice == '5':
-            print(f"\n  {C['Y']}🧪 Test dry-run jam {datetime.now().hour:02d}:00...{C['R']}\n")
+            _cprint(f"\n  [bold bright_yellow]🧪 Test dry-run jam {datetime.now().hour:02d}:00...[/]\n")
             try:
                 import superi_auto
                 superi_auto.run_auto(force_jam=datetime.now().hour, dry_run=True)
             except Exception as e:
-                print(f"  {C['RE']}✗ Error: {e}{C['R']}")
-            input(f"\n  {C['D']}[Enter]{C['R']}")
+                _cprint(f"  [bold red]✗ Error: {e}[/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         elif choice == '6':
             log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auto_log.txt")
             if os.path.exists(log_path):
@@ -2729,41 +2947,41 @@ def auto_mode_menu():
                 # Tampilkan 40 baris terakhir
                 for line in lines[-40:]:
                     print(f"  {line.rstrip()}")
-                print(f"\n  {C['D']}File: {log_path}{C['R']}")
+                _cprint(f"\n  [dim]File: {log_path}[/]")
             else:
-                print(f"\n  {C['Y']}⚠ Belum ada log. Jalankan test dulu (menu 5).{C['R']}")
-            input(f"\n  {C['D']}[Enter]{C['R']}")
+                _cprint(f"\n  [bold bright_yellow]⚠ Belum ada log. Jalankan test dulu (menu 5).[/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         elif choice == '7':
             scheduler_install_menu()
         elif choice == '8':
             clear()
             header("📖 PANDUAN SETUP TERJADWAL")
             print()
-            print(f"  {C['M']}{C['B']}🍎 macOS / Linux (cron){C['R']}\n")
-            print(f"  {C['D']}1. Buka terminal, ketik:{C['R']}")
-            print(f"     {C['C']}crontab -e{C['R']}\n")
-            print(f"  {C['D']}2. Tambahkan baris (jalan tiap jam menit ke-5):{C['R']}")
+            _cprint(f"  [bold magenta][bold]🍎 macOS / Linux (cron)[/]\n")
+            _cprint(f"  [dim]1. Buka terminal, ketik:[/]")
+            _cprint(f"     [bold bright_yellow]crontab -e[/]\n")
+            _cprint(f"  [dim]2. Tambahkan baris (jalan tiap jam menit ke-5):[/]")
             script_dir = os.path.dirname(os.path.abspath(__file__))
-            print(f"     {C['G']}5 * * * * {script_dir}/.venv/bin/python3 {script_dir}/superi_auto.py{C['R']}\n")
-            print(f"  {C['D']}3. Simpan & keluar (Ctrl+O, Enter, Ctrl+X di nano){C['R']}\n")
-            print(f"  {C['D']}Auto mode internal cek window jam jadi cuma eksekusi di rentang yang diset.{C['R']}\n")
-            print(f"  {C['M']}{C['B']}🪟 Windows (Task Scheduler){C['R']}\n")
-            print(f"  {C['D']}1. Buka {C['B']}Task Scheduler{C['R']} {C['D']}(cari di Start Menu){C['R']}")
-            print(f"  {C['D']}2. Create Basic Task → Daily, repeat every 5 minutes{C['R']}")
-            print(f"  {C['D']}3. Action: Start a program{C['R']}")
-            print(f"     {C['D']}- Program  : {C['C']}superi.bat{C['R']}")
-            print(f"     {C['D']}- Arguments: {C['C']}auto{C['R']}")
-            print(f"     {C['D']}- Start in : folder project{C['R']}\n")
-            print(f"  {C['D']}4. Centang \"Wake the computer to run this task\"{C['R']}\n")
-            print(f"  {C['Y']}{C['B']}⚠ SYARAT WAJIB:{C['R']}")
-            print(f"  {C['D']}  • Komputer menyala & tidak sleep{C['R']}")
-            print(f"  {C['D']}  • Akun SUPER-I sudah clock-in (absen masuk){C['R']}")
-            print(f"  {C['D']}  • Terhubung jaringan internal PLN + internet{C['R']}\n")
-            print(f"  {C['D']}Detail lengkap: AUTO_MODE.md di folder project{C['R']}")
-            input(f"\n  {C['D']}[Enter]{C['R']}")
+            _cprint(f"     [bold green]5 * * * * {script_dir}/.venv/bin/python3 {script_dir}/superi_auto.py[/]\n")
+            _cprint(f"  [dim]3. Simpan & keluar (Ctrl+O, Enter, Ctrl+X di nano)[/]\n")
+            _cprint(f"  [dim]Auto mode internal cek window jam jadi cuma eksekusi di rentang yang diset.[/]\n")
+            _cprint(f"  [bold magenta][bold]🪟 Windows (Task Scheduler)[/]\n")
+            _cprint(f"  [dim]1. Buka [bold]Task Scheduler[/] [dim](cari di Start Menu)[/]")
+            _cprint(f"  [dim]2. Create Basic Task → Daily, repeat every 5 minutes[/]")
+            _cprint(f"  [dim]3. Action: Start a program[/]")
+            _cprint(f"     [dim]- Program  : [bold bright_yellow]superi.bat[/]")
+            _cprint(f"     [dim]- Arguments: [bold bright_yellow]auto[/]")
+            _cprint(f"     [dim]- Start in : folder project[/]\n")
+            _cprint(f"  [dim]4. Centang \"Wake the computer to run this task\"[/]\n")
+            _cprint(f"  [bold bright_yellow][bold]⚠ SYARAT WAJIB:[/]")
+            _cprint(f"  [dim]  • Komputer menyala & tidak sleep[/]")
+            _cprint(f"  [dim]  • Akun SUPER-I sudah clock-in (absen masuk)[/]")
+            _cprint(f"  [dim]  • Terhubung jaringan internal PLN + internet[/]\n")
+            _cprint(f"  [dim]Detail lengkap: AUTO_MODE.md di folder project[/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         else:
-            print(f"\n  {C['RE']}✗ Pilihan tidak valid{C['R']}")
-            input(f"  {C['D']}[Enter]{C['R']}")
+            _cprint(f"\n  [bold red]✗ Pilihan tidak valid[/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
 
 def photo_settings_menu():
     """Menu pengaturan foto source: manual (per-item sesuai) vs pool (1 foto untuk semua).
@@ -2797,87 +3015,87 @@ def photo_settings_menu():
 
         # Badge source
         if photo_src == "manual":
-            src_badge = f"{C['G']}MANUAL{C['R']} (per-item sesuai input)"
+            src_badge = f"[bold green]MANUAL[/] (per-item sesuai input)"
             src_desc = "Foto per penyulang/trafo: random dari folder item + hv/mv terpisah + varian blur/kabur/asli"
         else:
-            src_badge = f"{C['Y']}POOL{C['R']} (1 foto untuk semua)"
+            src_badge = f"[bold bright_yellow]POOL[/] (1 foto untuk semua)"
             src_desc = "1 foto generic di photo/pool/ dipakai untuk semua item, re-encode beda SHA tiap upload"
 
-        print(f"  {C['D']}┌─ Sumber Foto ─────────────────────────────────────┐{C['R']}")
-        print(f"  {C['D']}│{C['R']}  Saat ini : {src_badge}")
-        print(f"  {C['D']}│{C['R']}  {C['D']}{src_desc}{C['R']}")
-        print(f"  {C['D']}│{C['R']}  Filename : {C['C']}fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg{C['R']} ({C['D']}humanizer tetap, bukan basename manual{C['R']})")
-        print(f"  {C['D']}│{C['R']}  OFF      : 7 penyulang CB OFF tetap simpan 84 foto tapi skip input (read-only, tidak dihapus)")
-        print(f"  {C['D']}└─────────────────────────────────────────────────┘{C['R']}")
+        _cprint(f"  [dim]┌─ Sumber Foto ─────────────────────────────────────┐[/]")
+        _cprint(f"  [dim]│[/]  Saat ini : {src_badge}")
+        _cprint(f"  [dim]│[/]  [dim]{src_desc}[/]")
+        _cprint(f"  [dim]│[/]  Filename : [bold bright_yellow]fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg[/] ([dim]humanizer tetap, bukan basename manual[/])")
+        _cprint(f"  [dim]│[/]  OFF      : 7 penyulang CB OFF tetap simpan 84 foto tapi skip input (read-only, tidak dihapus)")
+        _cprint(f"  [dim]└─────────────────────────────────────────────────┘[/]")
         print()
-        print(f"  {C['D']}┌─ Statistik Pool ──────────────────────────────────┐{C['R']}")
-        print(f"  {C['D']}│{C['R']}  Pool generic    : {C['G']}{pool_cnt}{C['R']} file di {C['D']}photo/pool/{C['R']}")
-        print(f"  {C['D']}│{C['R']}  Manual penyulang: {C['G']}{manual_bp.get('folders',0)}{C['R']} folder / {C['G']}{manual_bp.get('files',0)}{C['R']} foto (25 ON + 7 OFF tetap)")
-        print(f"  {C['D']}│{C['R']}  Manual beban    : {C['G']}{manual_bt.get('folders',0)}{C['R']} folder / {C['G']}{manual_bt.get('files',0)}{C['R']} foto (TRAFO_1/2/3)")
-        print(f"  {C['D']}│{C['R']}  Manual tegangan : {C['G']}{manual_tt.get('folders',0)}{C['R']} trafo / HV {C['G']}{manual_tt.get('hv',0)}{C['R']} + MV {C['G']}{manual_tt.get('mv',0)}{C['R']} = {C['G']}{manual_tt.get('total',0)}{C['R']} foto")
-        print(f"  {C['D']}│{C['R']}  Total manual    : {C['G']}{total_manual}{C['R']} foto")
-        print(f"  {C['D']}│{C['R']}  History         : {C['G']}{hist_days}{C['R']} hari")
-        print(f"  {C['D']}└─────────────────────────────────────────────────┘{C['R']}")
+        _cprint(f"  [dim]┌─ Statistik Pool ──────────────────────────────────┐[/]")
+        _cprint(f"  [dim]│[/]  Pool generic    : [bold green]{pool_cnt}[/] file di [dim]photo/pool/[/]")
+        _cprint(f"  [dim]│[/]  Manual penyulang: [bold green]{manual_bp.get('folders',0)}[/] folder / [bold green]{manual_bp.get('files',0)}[/] foto (25 ON + 7 OFF tetap)")
+        _cprint(f"  [dim]│[/]  Manual beban    : [bold green]{manual_bt.get('folders',0)}[/] folder / [bold green]{manual_bt.get('files',0)}[/] foto (TRAFO_1/2/3)")
+        _cprint(f"  [dim]│[/]  Manual tegangan : [bold green]{manual_tt.get('folders',0)}[/] trafo / HV [bold green]{manual_tt.get('hv',0)}[/] + MV [bold green]{manual_tt.get('mv',0)}[/] = [bold green]{manual_tt.get('total',0)}[/] foto")
+        _cprint(f"  [dim]│[/]  Total manual    : [bold green]{total_manual}[/] foto")
+        _cprint(f"  [dim]│[/]  History         : [bold green]{hist_days}[/] hari")
+        _cprint(f"  [dim]└─────────────────────────────────────────────────┘[/]")
         print()
-        print(f"  {C['M']}{C['B']}AKSI{C['R']}")
-        print(f"  {C['C']}[1]{C['R']} Ganti Sumber Foto (pool ↔ manual)")
-        print(f"  {C['C']}[2]{C['R']} Ganti History Days (3/7/14)")
-        print(f"  {C['C']}[3]{C['R']} Lihat Detail Pool per Item")
-        print(f"  {C['C']}[4]{C['R']} Validasi Foto Manual (scan 500+ file)")
+        _cprint(f"  [bold magenta][bold]AKSI[/]")
+        _cprint(f"  [bold bright_yellow][1][/] Ganti Sumber Foto (pool ↔ manual)")
+        _cprint(f"  [bold bright_yellow][2][/] Ganti History Days (3/7/14)")
+        _cprint(f"  [bold bright_yellow][3][/] Lihat Detail Pool per Item")
+        _cprint(f"  [bold bright_yellow][4][/] Validasi Foto Manual (scan 500+ file)")
         print()
-        print(f"  {C['M']}{C['B']}INFO{C['R']}")
-        print(f"  {C['C']}[5]{C['R']} Panduan: Cara foto manual anti-robotik")
-        print(f"  {C['C']}[6]{C['R']} Test Foto Random (lihat varian blur/kabur/asli)")
+        _cprint(f"  [bold magenta][bold]INFO[/]")
+        _cprint(f"  [bold bright_yellow][5][/] Panduan: Cara foto manual anti-robotik")
+        _cprint(f"  [bold bright_yellow][6][/] Test Foto Random (lihat varian blur/kabur/asli)")
         print()
-        print(f"  {C['RE']}[0]{C['R']} Kembali ke menu utama")
+        _cprint(f"  [bold red][0][/] Kembali ke menu utama")
         print()
-        print(f"  {C['D']}{'─' * 56}{C['R']}")
+        _cprint(f"  [dim]{'─' * 56}[/]")
 
-        choice = input(f"  {C['B']}Pilih ▸ {C['R']}").strip().lower()
+        choice = sc.prompt_ask('Pilih', default='0') if sc else input('  Pilih ▸ ').strip().lower()
 
         if choice == '0':
             return
         elif choice == '1':
             print()
-            print(f"  {C['B']}Pilih sumber foto:{C['R']}")
-            print(f"  {C['C']}pool{C['R']}   = 1 foto generic di photo/pool/ untuk semua input (fallback cepat)")
-            print(f"  {C['C']}manual{C['R']} = per-item sesuai input (random dari folder item + hv/mv terpisah + varian blur/kabur/asli)")
-            print(f"  {C['D']}Filename upload tetap humanizer: fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg (bukan basename manual){C['R']}")
-            print(f"  {C['D']}Foto tidak dihapus setelah dipakai (read-only random choice){C['R']}")
-            print(f"  {C['D']}OFF tetap simpan tapi skip input saat CB OFF{C['R']}")
+            _cprint(f"  [bold]Pilih sumber foto:[/]")
+            _cprint(f"  [bold bright_yellow]pool[/]   = 1 foto generic di photo/pool/ untuk semua input (fallback cepat)")
+            _cprint(f"  [bold bright_yellow]manual[/] = per-item sesuai input (random dari folder item + hv/mv terpisah + varian blur/kabur/asli)")
+            _cprint(f"  [dim]Filename upload tetap humanizer: fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg (bukan basename manual)[/]")
+            _cprint(f"  [dim]Foto tidak dihapus setelah dipakai (read-only random choice)[/]")
+            _cprint(f"  [dim]OFF tetap simpan tapi skip input saat CB OFF[/]")
             print(f"  Saat ini: {photo_src}")
             new_src = input(f"  Sumber baru (pool/manual) [batal]: ").strip().lower()
             if new_src in ("pool", "manual"):
                 if set_photo_source(new_src):
-                    print(f"\n  {C['G']}✓ Foto source diubah ke {new_src.upper()}{C['R']}")
+                    _cprint(f"\n  [bold green]✓ Foto source diubah ke {new_src.upper()}[/]")
                     if new_src == "manual":
-                        print(f"  {C['D']}  → Per-item: random dari photo/manual/{{tipe}}/{{ITEM}}/ + hv/mv terpisah{C['R']}")
-                        print(f"  {C['D']}  → Varian: asli 40%, blur_ringan 20%, blur_berat 10%, kabur_glare 15%, noisy_gelap 15%{C['R']}")
-                        print(f"  {C['D']}  → OFF 7 penyulang tetap ada tapi skip input CB OFF{C['R']}")
+                        _cprint(f"  [dim]  → Per-item: random dari photo/manual/{{tipe}}/{{ITEM}}/ + hv/mv terpisah[/]")
+                        _cprint(f"  [dim]  → Varian: asli 40%, blur_ringan 20%, blur_berat 10%, kabur_glare 15%, noisy_gelap 15%[/]")
+                        _cprint(f"  [dim]  → OFF 7 penyulang tetap ada tapi skip input CB OFF[/]")
                     else:
-                        print(f"  {C['D']}  → 1 foto generic di photo/pool/ untuk semua input{C['R']}")
-                        print(f"  {C['D']}  → Re-encode 720x720 crop ±5% + pixel jitter + quality 82-93 beda SHA tiap upload{C['R']}")
+                        _cprint(f"  [dim]  → 1 foto generic di photo/pool/ untuk semua input[/]")
+                        _cprint(f"  [dim]  → Re-encode 720x720 crop ±5% + pixel jitter + quality 82-93 beda SHA tiap upload[/]")
                 else:
-                    print(f"  {C['RE']}✗ Gagal ubah source{C['R']}")
+                    _cprint(f"  [bold red]✗ Gagal ubah source[/]")
             else:
-                print(f"  {C['Y']}⊘ Dibatalkan{C['R']}")
-            input(f"  {C['D']}[Enter]{C['R']}")
+                _cprint(f"  [bold bright_yellow]⊘ Dibatalkan[/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         elif choice == '2':
             print()
-            print(f"  {C['D']}History days = berapa hari ke belakang untuk smart suggest{R['C']}")
+            _cprint(f"  [dim]History days = berapa hari ke belakang untuk smart suggest{R['C']}")
             print(f"  Valid: 3, 7, 14 (default 7)")
             print(f"  Saat ini: {hist_days}")
             new_hist = input(f"  History baru (3/7/14) [batal]: ").strip()
             if new_hist in ("3", "7", "14"):
                 cfg["history_days"] = int(new_hist)
                 save_config(cfg)
-                print(f"  {C['G']}✓ History days diubah ke {new_hist}{C['R']}")
+                _cprint(f"  [bold green]✓ History days diubah ke {new_hist}[/]")
             else:
                 if new_hist:
-                    print(f"  {C['RE']}✗ Invalid, harus 3/7/14{C['R']}")
+                    _cprint(f"  [bold red]✗ Invalid, harus 3/7/14[/]")
                 else:
-                    print(f"  {C['Y']}⊘ Dibatalkan{C['R']}")
-            input(f"  {C['D']}[Enter]{C['R']}")
+                    _cprint(f"  [bold bright_yellow]⊘ Dibatalkan[/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         elif choice == '3':
             # Detail pool per item
             clear()
@@ -2885,10 +3103,10 @@ def photo_settings_menu():
             try:
                 base_manual = os.path.join(SCRIPT_DIR, "photo", "manual")
                 if not os.path.isdir(base_manual):
-                    print(f"  {C['RE']}Folder photo/manual/ tidak ada{C['R']}")
+                    _cprint(f"  [bold red]Folder photo/manual/ tidak ada[/]")
                 else:
                     # beban-penyulang
-                    print(f"\n  {C['M']}{C['B']}BEBAN PENYULANG (32 = 25 ON + 7 OFF){C['R']}")
+                    _cprint(f"\n  [bold magenta][bold]BEBAN PENYULANG (32 = 25 ON + 7 OFF)[/]")
                     bp_path = os.path.join(base_manual, "beban-penyulang")
                     if os.path.isdir(bp_path):
                         # load mapping untuk CB info
@@ -2914,10 +3132,10 @@ def photo_settings_menu():
                             except:
                                 pass
                             is_off = folder in off_names
-                            badge = f"{C['Y']}OFF{C['R']}" if is_off else f"{C['G']}ON{C['R']}"
+                            badge = f"[bold bright_yellow]OFF[/]" if is_off else f"[bold green]ON[/]"
                             print(f"    {folder:<22} : {cnt:>3} foto [{badge}] {'(skip CB OFF, tetap simpan)' if is_off else ''}")
                     # beban-trafo
-                    print(f"\n  {C['M']}{C['B']}BEBAN TRAFO (3){C['R']}")
+                    _cprint(f"\n  [bold magenta][bold]BEBAN TRAFO (3)[/]")
                     bt_path = os.path.join(base_manual, "beban-trafo")
                     if os.path.isdir(bt_path):
                         for folder in sorted(os.listdir(bt_path)):
@@ -2928,7 +3146,7 @@ def photo_settings_menu():
                             print(f"    {folder:<22} : {cnt:>3} foto")
 
                     # tegangan
-                    print(f"\n  {C['M']}{C['B']}TEGANGAN TRAFO (5 trafo × hv/mv terpisah){C['R']}")
+                    _cprint(f"\n  [bold magenta][bold]TEGANGAN TRAFO (5 trafo × hv/mv terpisah)[/]")
                     tt_path = os.path.join(base_manual, "tegangan-trafo")
                     if os.path.isdir(tt_path):
                         for trafo in sorted(os.listdir(tt_path)):
@@ -2941,15 +3159,15 @@ def photo_settings_menu():
                             cnt_mv = len([f for f in os.listdir(mv_path) if f.lower().endswith(('.jpg','.jpeg','.png'))]) if os.path.isdir(mv_path) else 0
                             print(f"    {trafo:<12} : HV {cnt_hv:>2} foto  MV {cnt_mv:>2} foto  (pisah folder, tidak perlu rename)")
 
-                    print(f"\n  {C['D']}Total manual: {total_manual} foto, pool generic: {pool_cnt} file{C['R']}")
-                    print(f"  {C['D']}Foto tidak dihapus setelah dipakai (read-only random){C['R']}")
+                    _cprint(f"\n  [dim]Total manual: {total_manual} foto, pool generic: {pool_cnt} file[/]")
+                    _cprint(f"  [dim]Foto tidak dihapus setelah dipakai (read-only random)[/]")
             except Exception as e:
-                print(f"  {C['RE']}Error: {e}{C['R']}")
-            input(f"\n  {C['D']}[Enter]{C['R']}")
+                _cprint(f"  [bold red]Error: {e}[/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         elif choice == '4':
             # Validasi foto manual
             print()
-            print(f"  {C['Y']}Menjalankan validasi foto manual (scan 500+ file)...{C['R']}")
+            _cprint(f"  [bold bright_yellow]Menjalankan validasi foto manual (scan 500+ file)...[/]")
             try:
                 import subprocess
                 import sys
@@ -2957,30 +3175,30 @@ def photo_settings_menu():
                 if os.path.isfile(script):
                     result = subprocess.run([sys.executable, script], cwd=SCRIPT_DIR)
                 else:
-                    print(f"  {C['RE']}tools/validate_manual_pool.py belum ada, jalankan manual:{C['R']}")
-                    print(f"  {C['D']}python3 -c \"import superi_humanizer as hu; print(hu.get_pool_stats())\"{C['R']}")
+                    _cprint(f"  [bold red]tools/validate_manual_pool.py belum ada, jalankan manual:[/]")
+                    _cprint(f"  [dim]python3 -c \"import superi_humanizer as hu; print(hu.get_pool_stats())\"[/]")
                     # fallback simple stats
                     if hu and hasattr(hu, "get_pool_stats"):
                         print(f"  {hu.get_pool_stats()}")
             except Exception as e:
-                print(f"  {C['RE']}Validasi error: {e}{C['R']}")
-            input(f"  {C['D']}[Enter]{C['R']}")
+                _cprint(f"  [bold red]Validasi error: {e}[/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         elif choice == '5':
             clear()
             header("📖 PANDUAN FOTO MANUAL ANTI-ROBOTIK")
             print(f"""
-  {C['B']}Kenapa per-item?{C['R']}
+  [bold]Kenapa per-item?[/]
   - Kalau pakai 1 foto untuk semua (pool mode), visual sama semua → mudah terdeteksi robotik
   - Per-item manual: CASABLANCA4 beda dengan LABORATORIUM, sesuai panel fisik asli
 
-  {C['B']}Foto diambil bagaimana?{C['R']}
+  [bold]Foto diambil bagaimana?[/]
   - Per penyulang 2-3 foto: close-up (30-50cm), wide (1m), 45° sudut
   - Per beban trafo 2 foto: full panel + close meter
   - Per tegangan trafo: HV dan MV pisah folder (hv/ & mv/), tiap sisi 2 foto
   - HP mode biasa, jangan portrait blur bawaan, size >100KB ideal
   - Taruh di: photo/manual/{{tipe}}/{{NAMA}}/ (auto random per input)
 
-  {C['B']}Varian blur/kabur/asli?{C['R']}
+  [bold]Varian blur/kabur/asli?[/]
   - Saat input CLI, dari folder item tersebut di-random 1 foto
   - Lalu di-apply varian random: asli 40%, blur ringan 20%, blur berat 10%,
     kabur glare 15% (pantulan lampu), noisy gelap 15% (cocok jam 00-06)
@@ -2990,34 +3208,34 @@ def photo_settings_menu():
   - Filename upload TETAP humanizer: fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg
     (bukan basename manual seperti WhatsApp Image...)
 
-  {C['B']}OFF handling:{C['R']}
+  [bold]OFF handling:[/]
   - 7 penyulang CB OFF (FISIOTERAPI, RONTGEN, REFLEXY, HERBAL, PINSET, KOPEL_*)
     foto tetap simpan 84 file, tapi skip input saat CB OFF (read-only)
 
-  {C['B']}Foto dihapus setelah dipakai?{C['R']}
+  [bold]Foto dihapus setelah dipakai?[/]
   - TIDAK. File asli tetap di disk, hanya dibaca random tiap input
   - Bisa dipakai lagi periode berikutnya, SHA beda karena varian+crop
 
-  {C['B']}Pool vs Manual:{C['R']}
+  [bold]Pool vs Manual:[/]
   - pool  : 1 foto di photo/pool/ untuk semua (fallback cepat, untuk demo)
            re-encode beda SHA tiap upload tapi visual sama
   - manual: per-item sesuai (random dari folder item + hv/mv terpisah)
            visual beda per penyulang, lebih natural, rekomendasi utama
 
-  {C['B']}Setting:{C['R']}
+  [bold]Setting:[/]
   - CLI: [T] Settings → [1] Ganti Sumber Foto (pool/manual)
   - Config: .superi_config.json key photo_source
   - Default: pool (backward compat)
 """)
-            input(f"  {C['D']}[Enter]{C['R']}")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         elif choice == '6':
             # Test foto random
             clear()
             header("🧪 TEST FOTO RANDOM + VARIAN")
             try:
                 if not hu:
-                    print(f"  {C['RE']}Humanizer tidak tersedia (PIL mungkin belum install){C['R']}")
-                    input(f"  {C['D']}[Enter]{C['R']}")
+                    _cprint(f"  [bold red]Humanizer tidak tersedia (PIL mungkin belum install)[/]")
+                    sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
                     continue
 
                 print(f"  Test random pick dari pool (source={photo_src}):\n")
@@ -3032,7 +3250,7 @@ def photo_settings_menu():
                         cnt = hu.get_manual_count(item_name, data_type)
                     except:
                         cnt = 0
-                    print(f"  {C['B']}{item_name}{C['R']} ({data_type}) - pool: {cnt} foto")
+                    _cprint(f"  [bold]{item_name}[/] ({data_type}) - pool: {cnt} foto")
                     for i in range(3):
                         try:
                             b = hu.rand_jpeg_bytes(item_name=item_name, data_type=data_type, photo_source=photo_src)
@@ -3045,7 +3263,7 @@ def photo_settings_menu():
                             print(f"    [{i+1}] Error: {e}")
 
                 # test tegangan hv/mv terpisah
-                print(f"\n  {C['B']}Tegangan TRAFO 1 HV/MV terpisah:{C['R']}")
+                _cprint(f"\n  [bold]Tegangan TRAFO 1 HV/MV terpisah:[/]")
                 for sub in ["HV","MV"]:
                     try:
                         b = hu.rand_jpeg_bytes(item_name="TRAFO 1", data_type="tegangan-trafo", subtype=sub, photo_source=photo_src)
@@ -3057,7 +3275,7 @@ def photo_settings_menu():
                     except Exception as e:
                         print(f"    {sub} Error: {e}")
 
-                print(f"\n  {C['D']}Filename upload tetap humanizer (bukan basename manual):{C['R']}")
+                _cprint(f"\n  [dim]Filename upload tetap humanizer (bukan basename manual):[/]")
                 if hasattr(hu, "rand_filename"):
                     from datetime import timezone, timedelta
                     import datetime as _dt
@@ -3066,15 +3284,15 @@ def photo_settings_menu():
                         fn = hu.rand_filename(sample_dt, idx=0, data_type=dtype, subtype="HV" if "tegangan" in dtype else None)
                         print(f"    {dtype}: {fn}")
 
-                print(f"\n  {C['G']}Test selesai. Foto tidak dihapus, tetap di disk (read-only random).{C['R']}")
+                _cprint(f"\n  [bold green]Test selesai. Foto tidak dihapus, tetap di disk (read-only random).[/]")
             except Exception as e:
-                print(f"  {C['RE']}Error test: {e}{C['R']}")
+                _cprint(f"  [bold red]Error test: {e}[/]")
                 import traceback
                 traceback.print_exc()
-            input(f"  {C['D']}[Enter]{C['R']}")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
         else:
-            print(f"\n  {C['RE']}✗ Pilihan tidak valid{C['R']}")
-            input(f"  {C['D']}[Enter]{C['R']}")
+            _cprint(f"\n  [bold red]✗ Pilihan tidak valid[/]")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
 
 
 def main():
@@ -3091,6 +3309,16 @@ def main():
         extra = sys.argv[idx + 1 :] if idx + 1 < len(sys.argv) else []
         cmd_logout_cli(extra)
         return
+
+    # Fullscreen Textual is the default only for the interactive CLI. Classic
+    # Rich output remains available for non-TTY sessions and `--classic`.
+    try:
+        from superi_tui import can_run_fullscreen, run_tui
+        if can_run_fullscreen():
+            run_tui()
+            return
+    except ImportError:
+        pass
 
     config = load_config()
     
@@ -3116,39 +3344,78 @@ def main():
         status_bar(user, gi_id, date_str)
         print()
 
-        # Menu 2 kolom: LIHAT + INPUT
-        print(f"  {C['M']}{C['B']}LIHAT DATA{C['R']}                    {C['M']}{C['B']}INPUT MANUAL{C['R']}")
-        print(f"  {C['C']}[1]{C['R']} Beban Penyulang        {C['C']}[4]{C['R']} Beban Penyulang")
-        print(f"  {C['C']}[2]{C['R']} Beban Trafo            {C['C']}[5]{C['R']} Beban Trafo")
-        print(f"  {C['C']}[3]{C['R']} Tegangan Trafo         {C['C']}[6]{C['R']} Tegangan Trafo")
-        print()
-
-        # Batch
-        print(f"  {C['Y']}{C['B']}BATCH per ITEM{C['R']}             {C['Y']}{C['B']}BATCH per JAM{C['R']} {C['G']}(+ Sync Portal){C['R']}")
-        print(f"  {C['C']}[7]{C['R']} Beban Penyulang        {C['C']}[A]{C['R']} Beban Penyulang")
-        print(f"  {C['C']}[8]{C['R']} Beban Trafo            {C['C']}[B]{C['R']} Beban Trafo")
-        print(f"  {C['C']}[9]{C['R']} Tegangan Trafo         {C['C']}[C]{C['R']} Tegangan Trafo")
-        print()
-
-        # Lain
+        # Menu 2 kolom: LIHAT + INPUT - Rich yellow theme
         _photo_src = get_photo_source()
-        _photo_badge = f"{C['G']}{_photo_src.upper()}{C['R']}" if _photo_src=="manual" else f"{C['Y']}{_photo_src.upper()}{C['R']}"
-        print(f"  {C['D']}{C['B']}PENGATURAN{C['R']}")
-        print(f"  {C['C']}[G]{C['R']} Ganti Tanggal   {C['C']}[L]{C['R']} Login Ulang   {C['C']}[O]{C['R']} Logout   {C['C']}[S]{C['R']} Setup   {C['RE']}[0]{C['R']} Keluar")
-        print(f"  {C['C']}[T]{C['R']} 📸 Foto Source [{_photo_badge}]  {C['D']}({ 'per-item sesuai' if _photo_src=='manual' else '1 foto semua' }, varian blur/kabur/asli){C['R']}")
-        print()
-        # Auto mode status
         _auto_cfg = load_config()
         _auto_on = _auto_cfg.get("auto_enabled", False)
-        _auto_badge = f"{C['G']}ON{C['R']}" if _auto_on else f"{C['RE']}OFF{C['R']}"
-        print(f"  {C['C']}[P]{C['R']} 🔄 Sync ke Portal APD    {C['C']}[D]{C['R']} ⏰ Auto Mode [{_auto_badge}]")
-        print()
-        print(f"  {C['D']}{'─' * 56}{C['R']}")
 
-        choice = input(f"  {C['B']}Pilih ▸ {C['R']}").strip().lower()
+        if sc and getattr(sc, 'console', None):
+            try:
+                sc.console.print("  [bold magenta]LIHAT DATA[/]                    [bold magenta]INPUT MANUAL[/]")
+                sc.console.print("  [bold bright_yellow][1][/] Beban Penyulang        [bold bright_yellow][4][/] Beban Penyulang")
+                sc.console.print("  [bold bright_yellow][2][/] Beban Trafo            [bold bright_yellow][5][/] Beban Trafo")
+                sc.console.print("  [bold bright_yellow][3][/] Tegangan Trafo         [bold bright_yellow][6][/] Tegangan Trafo")
+                sc.console.print()
+                sc.console.print("  [bold bright_yellow]BATCH per ITEM[/]             [bold bright_yellow]BATCH per JAM[/] [green](+ Sync Portal)[/]")
+                sc.console.print("  [bold bright_yellow][7][/] Beban Penyulang        [bold bright_yellow][A][/] Beban Penyulang")
+                sc.console.print("  [bold bright_yellow][8][/] Beban Trafo            [bold bright_yellow][B][/] Beban Trafo")
+                sc.console.print("  [bold bright_yellow][9][/] Tegangan Trafo         [bold bright_yellow][C][/] Tegangan Trafo")
+                sc.console.print()
+                sc.console.print("  [bold dim]PENGATURAN[/]")
+                photo_badge = f"[bold green]{_photo_src.upper()}[/]" if _photo_src=="manual" else f"[bold yellow]{_photo_src.upper()}[/]"
+                sc.console.print(f"  [bold bright_yellow][G][/] Ganti Tanggal   [bold bright_yellow][L][/] Login Ulang   [bold bright_yellow][O][/] Logout   [bold bright_yellow][S][/] Setup   [bold red][0][/] Keluar")
+                sc.console.print(f"  [bold bright_yellow][T][/] Foto Source [{photo_badge}]  [dim]({ 'per-item sesuai' if _photo_src=='manual' else '1 foto semua' }, varian blur/kabur/asli)[/]")
+                sc.console.print()
+                auto_badge = "[bold green]ON[/]" if _auto_on else "[bold red]OFF[/]"
+                sc.console.print(f"  [bold bright_yellow][P][/] Sync ke Portal APD    [bold bright_yellow][D][/] Auto Mode [{auto_badge}]")
+                sc.console.print()
+                sc.console.print(f"  [dim]{'─' * 56}[/]")
+                choice = sc.prompt_ask("Pilih", default="0").lower()
+            except Exception:
+                _cprint(f"  [bold magenta][bold]LIHAT DATA[/]                    [bold magenta][bold]INPUT MANUAL[/]")
+                _cprint(f"  [bold bright_yellow][1][/] Beban Penyulang        [bold bright_yellow][4][/] Beban Penyulang")
+                _cprint(f"  [bold bright_yellow][2][/] Beban Trafo            [bold bright_yellow][5][/] Beban Trafo")
+                _cprint(f"  [bold bright_yellow][3][/] Tegangan Trafo         [bold bright_yellow][6][/] Tegangan Trafo")
+                print()
+                _cprint(f"  [bold bright_yellow][bold]BATCH per ITEM[/]             [bold bright_yellow][bold]BATCH per JAM[/] [bold green](+ Sync Portal)[/]")
+                _cprint(f"  [bold bright_yellow][7][/] Beban Penyulang        [bold bright_yellow][A][/] Beban Penyulang")
+                _cprint(f"  [bold bright_yellow][8][/] Beban Trafo            [bold bright_yellow][B][/] Beban Trafo")
+                _cprint(f"  [bold bright_yellow][9][/] Tegangan Trafo         [bold bright_yellow][C][/] Tegangan Trafo")
+                print()
+                _photo_badge = f"[bold green]{_photo_src.upper()}[/]" if _photo_src=="manual" else f"[bold bright_yellow]{_photo_src.upper()}[/]"
+                _cprint(f"  [dim][bold]PENGATURAN[/]")
+                _cprint(f"  [bold bright_yellow][G][/] Ganti Tanggal   [bold bright_yellow][L][/] Login Ulang   [bold bright_yellow][O][/] Logout   [bold bright_yellow][S][/] Setup   [bold red][0][/] Keluar")
+                _cprint(f"  [bold bright_yellow][T][/] Foto Source [{_photo_badge}]  [dim]({ 'per-item sesuai' if _photo_src=='manual' else '1 foto semua' }, varian blur/kabur/asli)[/]")
+                print()
+                _auto_badge = f"[bold green]ON[/]" if _auto_on else f"[bold red]OFF[/]"
+                _cprint(f"  [bold bright_yellow][P][/] Sync ke Portal APD    [bold bright_yellow][D][/] Auto Mode [{_auto_badge}]")
+                print()
+                _cprint(f"  [dim]{'─' * 56}[/]")
+                choice = sc.prompt_ask('Pilih', default='0') if sc else input('  Pilih ▸ ').strip().lower()
+        else:
+            _cprint(f"  [bold magenta][bold]LIHAT DATA[/]                    [bold magenta][bold]INPUT MANUAL[/]")
+            _cprint(f"  [bold bright_yellow][1][/] Beban Penyulang        [bold bright_yellow][4][/] Beban Penyulang")
+            _cprint(f"  [bold bright_yellow][2][/] Beban Trafo            [bold bright_yellow][5][/] Beban Trafo")
+            _cprint(f"  [bold bright_yellow][3][/] Tegangan Trafo         [bold bright_yellow][6][/] Tegangan Trafo")
+            print()
+            _cprint(f"  [bold bright_yellow][bold]BATCH per ITEM[/]             [bold bright_yellow][bold]BATCH per JAM[/] [bold green](+ Sync Portal)[/]")
+            _cprint(f"  [bold bright_yellow][7][/] Beban Penyulang        [bold bright_yellow][A][/] Beban Penyulang")
+            _cprint(f"  [bold bright_yellow][8][/] Beban Trafo            [bold bright_yellow][B][/] Beban Trafo")
+            _cprint(f"  [bold bright_yellow][9][/] Tegangan Trafo         [bold bright_yellow][C][/] Tegangan Trafo")
+            print()
+            _photo_badge = f"[bold green]{_photo_src.upper()}[/]" if _photo_src=="manual" else f"[bold bright_yellow]{_photo_src.upper()}[/]"
+            _cprint(f"  [dim][bold]PENGATURAN[/]")
+            _cprint(f"  [bold bright_yellow][G][/] Ganti Tanggal   [bold bright_yellow][L][/] Login Ulang   [bold bright_yellow][O][/] Logout   [bold bright_yellow][S][/] Setup   [bold red][0][/] Keluar")
+            _cprint(f"  [bold bright_yellow][T][/] Foto Source [{_photo_badge}]  [dim]({ 'per-item sesuai' if _photo_src=='manual' else '1 foto semua' }, varian blur/kabur/asli)[/]")
+            print()
+            _auto_badge = f"[bold green]ON[/]" if _auto_on else f"[bold red]OFF[/]"
+            _cprint(f"  [bold bright_yellow][P][/] Sync ke Portal APD    [bold bright_yellow][D][/] Auto Mode [{_auto_badge}]")
+            print()
+            _cprint(f"  [dim]{'─' * 56}[/]")
+            choice = sc.prompt_ask('Pilih', default='0') if sc else input('  Pilih ▸ ').strip().lower()
 
         if choice == '0':
-            print(f"\n  {C['G']}✓ Selamat bekerja!{C['R']}\n")
+            _cprint(f"\n  [bold green]✓ Selamat bekerja![/]\n")
             break
         
         # Login if needed
@@ -3156,7 +3423,7 @@ def main():
             print("\n  Login...")
             token, user, gi_id = do_login(config)
             if not token:
-                input(f"  {C['D']}[Enter]{C['R']}")
+                sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
                 continue
         
         try:
@@ -3164,7 +3431,7 @@ def main():
                 date_str = input("  Tanggal (YYYY-MM-DD): ").strip() or date_str
             elif choice == 'l':
                 token, user, gi_id = do_login(config)
-                input(f"  {C['D']}[Enter]{C['R']}")
+                sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
             elif choice == 's':
                 setup_config()
                 config = load_config()
@@ -3211,7 +3478,7 @@ def main():
                     config = new_cfg if isinstance(new_cfg, dict) else load_config()
         except Exception as e:
             print(f"\n  ✗ Error: {e}")
-            input(f"  {C['D']}[Enter]{C['R']}")
+            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
 
 if __name__ == "__main__":
     main()

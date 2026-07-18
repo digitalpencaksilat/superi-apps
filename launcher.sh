@@ -28,8 +28,9 @@ if [ "$1" == "web" ] || [ "$1" == "w" ]; then
 
 elif [ "$1" == "cli" ] || [ "$1" == "c" ]; then
     cd "$SUPERI_DIR"
+    shift
     echo "💻 Menjalankan SUPER-I APP CLI Interactive..."
-    $PYTHON superi_app.py
+    $PYTHON superi_app.py "$@"
 
 elif [ "$1" == "input" ] || [ "$1" == "i" ]; then
     cd "$SUPERI_DIR"
@@ -60,6 +61,10 @@ elif [ "$1" == "logout" ] || [ "$1" == "lo" ]; then
     echo "   Auto mode & cron akan OTOMATIS NONAKTIF"
     $PYTHON superi_app.py --logout "$@"
 
+elif [ $# -eq 0 ]; then
+    cd "$SUPERI_DIR"
+    $PYTHON superi_app.py
+
 else
     echo "SUPER-I APP Launcher"
     echo "===================="
@@ -69,6 +74,7 @@ else
     echo "Commands:"
     echo "  web, w           Jalankan web dashboard (http://localhost:8888)"
     echo "  cli, c           Jalankan CLI interaktif"
+    echo "    --classic      Gunakan tampilan Rich klasik (tanpa fullscreen)"
     echo "  input, i [opts]  Jalankan CLI scripting (input ke SUPER-I)"
     echo "  sync, s [opts]   Sync ke Portal APD (no-args = buka CLI; --type/--jam = non-interactive)"
     echo "  logout, lo       Logout akun (hapus kredensial + auto OFF + hapus cron otomatis)"

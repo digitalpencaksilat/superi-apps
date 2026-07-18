@@ -437,30 +437,112 @@ def submit_beban(token: str, data_type: str, gi_id: int, item_id: int,
         return False
 
 
+def _get_console():
+    """Return Rich console with yellow theme if available."""
+    try:
+        import superi_console as sc
+        return sc.console
+    except ImportError:
+        try:
+            from rich.console import Console
+            return Console(highlight=False)
+        except ImportError:
+            return None
+
+_console = _get_console()
+RICH_INPUT = _console is not None
+
+
 def list_data(token: str, data_type: str, gi_id: int, date_str: str = None):
-    """Tampilkan daftar penyulang/trafo dan ringkasan data."""
+    """Tampilkan daftar penyulang/trafo dengan Rich Table tema kuning."""
     ep = ENDPOINTS[data_type]
     if date_str is None:
         date_str = datetime.now().strftime("%Y-%m-%d")
-    
+
     status, data = api_request("GET", ep["list"], token,
                                params={"garduIndukId": gi_id, "date": date_str})
     if status != 200:
-        print(f"Error: {data.get('message', 'Unknown')}")
+        if RICH_INPUT and _console:
+            _console.print(f"  [bold red]✗ Error: {data.get('message', 'Unknown')}[/]")
+        else:
+            print(f"Error: {data.get('message', 'Unknown')}")
         return
-    
+
     items = data["data"].get("items", [])
     total = data["data"].get("totalItems", len(items))
+
+    if RICH_INPUT and _console:
+        try:
+            from rich.table import Table
+            from rich.panel import Panel
+            from rich.text import Text
+            table = Table(
+                title=f"[bold bright_yellow]{ep['label']} · GI:{gi_id} · {date_str} ({total} items)[/]",
+                header_style="bold bright_yellow",
+                border_style="bright_yellow",
+                title_style="bold bright_yellow",
+            )
+            table.add_column("ID", justify="right", style="cyan", width=6)
+            table.add_column("Nama", style="white", min_width=16)
+            table.add_column("iMax", justify="right", style="bold bright_yellow")
+            table.add_column("CB", justify="center")
+            table.add_column("Trafo/IsPS", style="dim white")
+            table.add_column("Terisi", justify="right", style="bold bright_yellow")
+            table.add_column("Range / Strip", style="dim white", overflow="fold")
+
+            for item in items:
+                nama = item.get("nama", "?")
+                item_id = item.get("id", "?")
+                data_entries = item.get("beban" if "beban" in data_type else "tegangan", [])
+                if data_entries is None:
+                    data_entries = item.get("beban", [])
+                if data_type == "beban-penyulang":
+                    i_max = item.get("iMax", "?")
+                    trafo = item.get("trafo", {}).get("nama", "")
+                    status_cb = item.get("statusCB", "")
+                    cb_txt = Text("OFF", style="bold red") if status_cb == "OFF" else Text("ON", style="bold green")
+                    label = trafo
+                elif data_type == "beban-trafo":
+                    i_max = item.get("iMax", "?")
+                    label = ""
+                    cb_txt = Text("")
+                else:
+                    i_max = ""
+                    is_ps = item.get("isPS", False)
+                    label = "PS" if is_ps else "GI"
+                    cb_txt = Text(label, style="bold cyan" if is_ps else "white")
+                    label = label  # reuse
+
+                if data_entries:
+                    if data_type == "tegangan-trafo":
+                        vals_mv = [e.get("mv", 0) for e in data_entries]
+                        vals_hv = [e.get("hv", 0) for e in data_entries]
+                        range_str = f"MV {min(vals_mv):.1f}-{max(vals_mv):.1f} HV {min(vals_hv)}-{max(vals_hv)}"
+                    else:
+                        values = [b.get("beban", 0) for b in data_entries]
+                        range_str = f"{min(values)}-{max(values)}A"
+                    periods = sorted([b.get("periode", -1) for b in data_entries])
+                    terisi = f"{len(periods)}/24"
+                else:
+                    range_str = "—"
+                    terisi = "0/24"
+
+                table.add_row(str(item_id), nama, f"{i_max}A" if i_max != "?" and i_max != "" else str(i_max), cb_txt, str(label), terisi, range_str)
+
+            _console.print(table)
+            return
+        except Exception:
+            pass
+
+    # Fallback plain
     print(f"\n{'='*60}")
     print(f"  {ep['label']} - GI:{gi_id} - {date_str} ({total} items)")
     print(f"{'='*60}")
-    
+
     for item in items:
         nama = item.get("nama", "?")
         item_id = item.get("id", "?")
-        gi = item.get("garduInduk", {}).get("nama", "?")
         data_entries = item.get("beban", [])
-        
         if data_type == "beban-penyulang":
             i_max = item.get("iMax", "?")
             trafo = item.get("trafo", {}).get("nama", "")
@@ -469,7 +551,6 @@ def list_data(token: str, data_type: str, gi_id: int, date_str: str = None):
         else:
             i_max = item.get("iMax", "?")
             print(f"\n  [{item_id}] {nama} (iMax={i_max}A)")
-        
         if data_entries:
             values = [b["beban"] for b in data_entries]
             periods = sorted([b["periode"] for b in data_entries])
@@ -479,13 +560,29 @@ def list_data(token: str, data_type: str, gi_id: int, date_str: str = None):
 
 
 def delete_entry(token: str, data_type: str, entry_id: int):
-    """Hapus entry data."""
+    """Hapus entry data dengan konfirmasi Rich."""
     ep = ENDPOINTS[data_type]
+
+    if RICH_INPUT and _console:
+        try:
+            from rich.prompt import Confirm
+            if not Confirm.ask(f"  Hapus entry [bold bright_yellow]{entry_id}[/] ({ep['label']})?", console=_console, default=False):
+                _console.print(f"  [dim]Dibatalkan.[/]")
+                return
+        except Exception:
+            pass
+
     status, data = api_request("DELETE", f"{ep['delete']}/{entry_id}", token)
     if status == 200:
-        print(f"  ✓ Entry {entry_id} berhasil dihapus!")
+        if RICH_INPUT and _console:
+            _console.print(f"  [bold green]✓ Entry {entry_id} berhasil dihapus![/]")
+        else:
+            print(f"  ✓ Entry {entry_id} berhasil dihapus!")
     else:
-        print(f"  ✗ Gagal: {data.get('message', 'Unknown')}")
+        if RICH_INPUT and _console:
+            _console.print(f"  [bold red]✗ Gagal: {data.get('message', 'Unknown')}[/]")
+        else:
+            print(f"  ✗ Gagal: {data.get('message', 'Unknown')}")
 
 
 # ============================================================
@@ -493,7 +590,7 @@ def delete_entry(token: str, data_type: str, entry_id: int):
 # ============================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="SUPER-I APP Data Input Tool")
+    parser = argparse.ArgumentParser(description="SUPER-I APP Data Input Tool (Rich + Tema Kuning)")
     parser.add_argument("--nip", default=os.environ.get("SUPERI_NIP", ""), help="NIP")
     parser.add_argument("--pass", default=os.environ.get("SUPERI_PASS", ""), dest="password", help="Password (atau set env SUPERI_PASS)")
     parser.add_argument("--type", choices=["beban-penyulang", "beban-trafo", "tegangan-trafo"], help="Tipe data")
@@ -506,16 +603,43 @@ def main():
     parser.add_argument("--list-penyulang", action="store_true", help="Tampilkan daftar penyulang")
     parser.add_argument("--list-trafo", action="store_true", help="Tampilkan daftar trafo")
     parser.add_argument("--delete", type=int, dest="delete_id", help="Hapus entry")
-    
+
     args = parser.parse_args()
-    
-    print("=" * 60)
-    print("  SUPER-I APP Data Input Tool")
-    print("=" * 60)
-    
-    token = login(args.nip, args.password)
-    print(f"  ✓ Login berhasil")
-    
+
+    if RICH_INPUT and _console:
+        try:
+            from rich.panel import Panel
+            _console.print(Panel(
+                f"[bold bright_yellow]SUPER-I APP[/] [white]Data Input Tool[/]\n[dim]Direct API Mode · Production Ready[/]",
+                border_style="bright_yellow", box=_console.box if hasattr(_console, 'box') else None, width=60
+            ))
+        except Exception:
+            print("=" * 60)
+            print("  SUPER-I APP Data Input Tool")
+            print("=" * 60)
+    else:
+        print("=" * 60)
+        print("  SUPER-I APP Data Input Tool")
+        print("=" * 60)
+
+    # Check credentials
+    if not args.nip or not args.password:
+        if RICH_INPUT and _console:
+            _console.print(f"  [bold red]✗ NIP atau Password belum diisi.[/]")
+            _console.print(f"  [dim]Gunakan: --nip NIP --pass PASS atau ENV SUPERI_NIP / SUPERI_PASS[/]")
+        else:
+            print("  ✗ NIP atau Password belum diisi.")
+        return
+
+    if RICH_INPUT and _console:
+        with _console.status(f"[bold bright_yellow]Login ke SUPER-I...[/]", spinner="dots", spinner_style="bright_yellow"):
+            token = login(args.nip, args.password)
+        _console.print(f"  [bold green]✓ Login berhasil[/]")
+    else:
+        print("  Login...")
+        token = login(args.nip, args.password)
+        print(f"  ✓ Login berhasil")
+
     if args.list_penyulang:
         list_data(token, "beban-penyulang", args.gi, args.date)
         return
@@ -524,19 +648,25 @@ def main():
         return
     if args.delete_id:
         if not args.type:
-            print("  ✗ Harap tentukan --type")
+            if RICH_INPUT and _console:
+                _console.print(f"  [bold red]✗ Harap tentukan --type[/]")
+            else:
+                print("  ✗ Harap tentukan --type")
             return
         delete_entry(token, args.type, args.delete_id)
         return
     if args.type:
         if not args.item_id or args.periode is None or args.value is None:
-            print("  ✗ Harap tentukan --id, --periode, --value")
+            if RICH_INPUT and _console:
+                _console.print(f"  [bold red]✗ Harap tentukan --id, --periode, --value[/]")
+            else:
+                print("  ✗ Harap tentukan --id, --periode, --value")
             return
         submit_beban(token, args.type, args.gi, args.item_id,
                      args.periode, args.value, args.date,
                      value_2=args.hv)
         return
-    
+
     parser.print_help()
 
 if __name__ == "__main__":

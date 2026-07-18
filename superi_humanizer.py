@@ -1284,6 +1284,13 @@ def _next_spaced_datetime(date_str: str, periode: int, durasi_sec: float = None,
     if is_current_hour:
         hard_start = h_start
         hard_end = now
+        # Pada beberapa menit pertama setelah pergantian jam, 25 foto tidak
+        # mungkin muat dengan gap aman. Izinkan timeline mundur sedikit ke jam
+        # sebelumnya daripada memampatkan timestamp menjadi 2-6 detik.
+        reserved_gap = 10.5
+        min_batch_span = 24 * reserved_gap + 60
+        if (hard_end - hard_start).total_seconds() < min_batch_span:
+            hard_start = hard_end - timedelta(seconds=min_batch_span)
     else:
         hard_start = h_start
         hard_end = h_end
@@ -1306,6 +1313,11 @@ def _next_spaced_datetime(date_str: str, periode: int, durasi_sec: float = None,
             # Random lagi untuk first agar tidak selalu di ujung
             total_offset = random.uniform(min(5.0, total_offset), total_offset)
             total_offset = max(2.0, total_offset)
+            # Sisakan ruang untuk batch penyulang umum (25 foto) dengan gap aman.
+            available = (hard_end - hard_start).total_seconds()
+            reserved_gap = 10.5
+            if available >= 24 * reserved_gap + 4:
+                total_offset = min(total_offset, available - 24 * reserved_gap - 2)
             cand = hard_end - timedelta(seconds=total_offset, milliseconds=random.randint(50, 900))
             if cand < hard_start:
                 cand = hard_start + timedelta(seconds=random.uniform(10, 120), milliseconds=random.randint(50, 900))
@@ -1316,6 +1328,18 @@ def _next_spaced_datetime(date_str: str, periode: int, durasi_sec: float = None,
         return cand
 
     oldest = min(existing)  # timestamp paling lama (paling kecil) -> next harus lebih lama lagi (mundur)
+    if is_current_hour and len(existing) < 25:
+        available = (oldest - hard_start).total_seconds()
+        reserved_gap = 10.5
+        remaining_after = 24 - len(existing)
+        max_gap = available - remaining_after * reserved_gap
+        if max_gap >= reserved_gap:
+            low_gap = reserved_gap
+            gap = random.uniform(low_gap, min(20.9, max_gap))
+            cand = oldest - timedelta(seconds=gap)
+            _FOTO_TIMELINE[key].append(cand)
+            return cand
+
     # Untuk current hour, kita mundur terus dari oldest
     attempts = 0
     while attempts < 60:
@@ -1461,6 +1485,10 @@ def rand_foto_pair(date_str: str, periode: int, durasi_min: float = None):
     if is_current_hour:
         hard_start = h_start
         hard_end = now
+        # Lima pair membutuhkan ruang untuk gap HV-MV dan antar-trafo. Pada
+        # awal jam gunakan overlap historis pendek agar spacing tidak rusak.
+        if (hard_end - hard_start).total_seconds() < 5 * 45:
+            hard_start = hard_end - timedelta(seconds=5 * 45)
     else:
         hard_start = h_start
         hard_end = h_end
