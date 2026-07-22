@@ -301,7 +301,7 @@ def render_settings_box(photo_source, history_days, pool_count, manual_stats, to
         lines.append(f"  Total manual    : {total_manual} foto")
     lines.append(f"  Filename    : fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg (humanizer tetap, bukan basename manual)")
     lines.append(f"  OFF         : 7 penyulang CB OFF tetap simpan tapi skip input")
-    lines.append(f"  Varian      : asli 40%, blur_ringan 20%, blur_berat 10%, kabur_glare 15%, noisy_gelap 15%")
+    lines.append(f"  Varian      : asli 45%, blur_ringan 25%, blur_berat 15%, noisy_gelap 15%")
     return lines
 
 
@@ -704,6 +704,6 @@ def settings_rich(photo_source, history_days, pool_count, manual_stats, total_ma
 
     grid.add_row("Filename:", "fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg (humanizer tetap)")
     grid.add_row("OFF:", "7 penyulang CB OFF tetap simpan tapi skip input")
-    grid.add_row("Varian:", "asli 40%, blur_ringan 20%, blur_berat 10%, kabur_glare 15%, noisy_gelap 15%")
+    grid.add_row("Varian:", "asli 45%, blur_ringan 25%, blur_berat 15%, noisy_gelap 15%")
 
     return Panel(grid, title="[bold bright_yellow]Pengaturan Foto & Pool[/]", border_style=YELLOW, box=_box.ROUNDED, padding=(0, 1))

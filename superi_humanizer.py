@@ -57,9 +57,9 @@ _UTC = timezone.utc
 _VALID_PHOTO_SOURCES = {"pool", "manual"}
 _DEFAULT_PHOTO_SOURCE = "pool"
 
-# Variant weights: asli 40%, blur ringan 20%, blur berat 10%, kabur glare 15%, noisy gelap 15%
-_VARIANT_CHOICES = ["asli", "blur_ringan", "blur_berat", "kabur_glare", "noisy_gelap"]
-_VARIANT_WEIGHTS = [40, 20, 10, 15, 15]
+# Variant weights: asli 45%, blur ringan 25%, blur berat 15%, noisy gelap 15%
+_VARIANT_CHOICES = ["asli", "blur_ringan", "blur_berat", "noisy_gelap"]
+_VARIANT_WEIGHTS = [45, 25, 15, 15]
 
 # ============================================================
 # REAL LOCATIONS - dari API manual (13 alamat unik di sekitar GI MANGGARAI)
@@ -308,7 +308,7 @@ def _get_photo_pool_per_item(item_name=None, data_type=None, subtype=None, photo
 
 def _apply_variant_transform(img, mode="auto"):
     """
-    Varian blur/kabur/asli + noisy gelap (untuk jam 00-06).
+    Varian asli, blur, dan noisy gelap (untuk jam 00-06).
     Returns (img, variant_name)
     """
     try:
@@ -339,21 +339,6 @@ def _apply_variant_transform(img, mode="auto"):
         except Exception:
             pass
         return img, "blur_berat"
-    elif mode == "kabur_glare":
-        try:
-            w, h = img.size
-            draw = ImageDraw.Draw(img)
-            gx = random.randint(0, max(0, w // 3))
-            gy = random.randint(0, max(0, h // 3))
-            gw = random.randint(80, 240)
-            gh = random.randint(30, 110)
-            # glare ellipse putih kekuningan
-            draw.ellipse([gx, gy, gx+gw, gy+gh], fill=(255, 255, 240))
-            img = img.filter(ImageFilter.GaussianBlur(radius=0.5))
-            img = ImageEnhance.Brightness(img).enhance(random.uniform(0.95, 1.08))
-        except Exception:
-            pass
-        return img, "kabur_glare"
     elif mode == "noisy_gelap":
         try:
             w, h = img.size
@@ -549,14 +534,14 @@ def _reencode_pool_image(path: str, target_w: int = None, target_h: int = None, 
     1. Open + convert RGB
     2. Crop center square (anti bypass: dimensi jadi square 720x720 seperti app)
     3. Resize ke target_w x target_h (default 720x720, weighted sesuai audit)
-    4. VARIAN: asli / blur_ringan / blur_berat / kabur_glare / noisy_gelap (random 40/20/10/15/15)
+    4. VARIAN: asli / blur_ringan / blur_berat / noisy_gelap (random 45/25/15/15)
     5. Variasi pixel halus (1-3 pixel tweak) — anti hash duplicate
     6. Save baseline JPEG (progressive=False, no EXIF, no COM)
 
     Args:
         path: path foto source
         target_w, target_h: target dimensi
-        variant_mode: "auto" (random) atau "asli"/"blur_ringan"/"blur_berat"/"kabur_glare"/"noisy_gelap"
+        variant_mode: "auto" (random) atau "asli"/"blur_ringan"/"blur_berat"/"noisy_gelap"
 
     Returns: JPEG bytes atau None. _LAST_META di-update dengan variant + src_path
     """
@@ -819,14 +804,6 @@ def _rand_jpeg_via_pil(width=None, height=None, quality=None):
         bc = (random.randint(40, 110), random.randint(40, 110), random.randint(40, 110))
         draw.rectangle([bx, by, bx + bw, by + bh], fill=bc, outline=(0, 0, 0))
 
-    # Glare / pantulan cahaya (realistic untuk foto meter)
-    if random.random() < 0.4:
-        gx = random.randint(0, width // 4)
-        gy = random.randint(0, height // 4)
-        gw = random.randint(50, 150)
-        gh = random.randint(20, 80)
-        draw.ellipse([gx, gy, gx + gw, gy + gh], fill=(255, 255, 255))
-
     out = io.BytesIO()
     # Baseline JPEG, no progressive, no EXIF, quality 82-93 => 20-60KB for 720x720
     img.save(out, format="JPEG", quality=quality, optimize=True, exif=b'', progressive=False)
@@ -839,7 +816,7 @@ def rand_jpeg_bytes(target_w: int = None, target_h: int = None, item_name: str =
 
     - Jika photo_source=manual + item_name ada -> ambil dari photo/manual/{data_type}/{ITEM}/ (per-item sesuai)
       + hv/mv terpisah untuk tegangan (photo/manual/tegangan-trafo/TRAFO_1/hv/ & mv/)
-      + random pick + varian blur/kabur/asli/noisy_gelap (40/20/10/15/15)
+      + random pick + varian asli/blur/noisy (45/25/15/15)
     - Jika photo_source=pool (default) -> ambil dari photo/pool/ 1 foto untuk semua
     - Fallback synthetic 720x720 jika pool kosong
     - Baseline JPEG, no progressive, no COM, no EXIF
@@ -852,7 +829,7 @@ def rand_jpeg_bytes(target_w: int = None, target_h: int = None, item_name: str =
         data_type: beban-penyulang / beban-trafo / tegangan-trafo
         subtype: untuk tegangan: HV atau MV
         photo_source: "pool" (1 foto semua) atau "manual" (per-item sesuai)
-        variant_mode: "auto" atau "asli"/"blur_ringan"/"blur_berat"/"kabur_glare"/"noisy_gelap"
+        variant_mode: "auto" atau "asli"/"blur_ringan"/"blur_berat"/"noisy_gelap"
 
     Returns:
         bytes JPEG valid
@@ -876,7 +853,7 @@ def rand_jpeg_bytes(target_w: int = None, target_h: int = None, item_name: str =
         # Coba 5 kali dari pool (random pick per input) — strict 720x720
         for _ in range(5):
             p = random.choice(pool_files)
-            # variant_mode: auto = random 40% asli, 20% blur_ringan, 10% blur_berat, 15% kabur_glare, 15% noisy_gelap
+            # variant_mode: auto = random 45% asli, 25% blur_ringan, 15% blur_berat, 15% noisy_gelap
             enc = _reencode_pool_image(p, 720, 720, variant_mode=variant_mode or "auto")
             if enc and enc.startswith(b"\xff\xd8") and len(enc) >= 8000:
                 # Validasi dimensi strict 720x720
@@ -1014,7 +991,7 @@ def rand_jpeg_pair(target_w: int = None, target_h: int = None, item_name: str = 
         v2 = None
         if attempt % 2 == 0:
             # Coba variant berbeda
-            variants = ["asli", "blur_ringan", "blur_berat", "kabur_glare", "noisy_gelap"]
+            variants = ["asli", "blur_ringan", "blur_berat", "noisy_gelap"]
             v1 = random.choice(variants)
             v2 = random.choice([x for x in variants if x != v1])
 

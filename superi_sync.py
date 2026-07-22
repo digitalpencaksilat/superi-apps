@@ -410,79 +410,131 @@ class PortalPLN:
         return False
 
 # ============ SYNC ENGINE (Rich Progress + Yellow Theme) ============
-def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run: bool = True):
+def do_sync(
+    data_type: str,
+    jam_start: int,
+    jam_end: int,
+    date_str: str,
+    dry_run: bool = True,
+    progress_callback=None,
+    event_callback=None,
+):
     """Full sync: fetch SUPER-I → push Portal PLN. Rich progress + yellow theme."""
 
     type_labels = {"penyulang": "Beban Penyulang", "trafo": "Beban Trafo", "tegangan": "Tegangan Trafo"}
 
-    # Header with yellow theme
-    header(f"SYNC {type_labels[data_type]}")
+    embedded = event_callback is not None
+
+    def emit(event: str, **data):
+        if event_callback is not None:
+            try:
+                event_callback(event, data)
+            except Exception:
+                pass
+
+    if embedded:
+        emit("section", label=type_labels[data_type], mode="PRATINJAU" if dry_run else "LIVE")
+    else:
+        header(f"SYNC {type_labels[data_type]}")
 
     # 1. SUPER-I: fetch
-    if RICH and console and sc:
+    emit("stage", message="Masuk ke SUPER-I...")
+    if embedded:
+        token = superi_login()
+    elif RICH and console and sc:
         from rich.status import Status
         with console.status(f"[bold bright_yellow]SUPER-I APP: Logging in...[/]", spinner="dots", spinner_style="bright_yellow"):
             token = superi_login()
-    else:
+    elif not embedded:
         info("SUPER-I APP: Logging in...")
         token = superi_login()
 
     if not token:
-        err("SUPER-I login failed")
+        if embedded:
+            emit("error", message="Login SUPER-I gagal")
+        else:
+            err("SUPER-I login failed")
         return False
 
-    if not (RICH and sc):
+    if embedded:
+        emit("stage_ok", message="Login SUPER-I berhasil")
+    elif not (RICH and sc):
         ok("SUPER-I login OK")
     else:
         console.print(f"  [bold green]✓[/] SUPER-I login OK")
 
-    if RICH and console and sc:
+    emit("stage", message="Memuat data SUPER-I...")
+    if embedded:
+        superi_data = fetch_superi_data(data_type, token, date_str)
+    elif RICH and console and sc:
         with console.status(f"[bold bright_yellow]Fetching {data_type} data...[/]", spinner="dots", spinner_style="bright_yellow"):
             superi_data = fetch_superi_data(data_type, token, date_str)
-    else:
+    elif not embedded:
         info(f"SUPER-I APP: Fetching {data_type} data...")
         superi_data = fetch_superi_data(data_type, token, date_str)
 
     if not superi_data:
-        err("No data from SUPER-I")
+        if embedded:
+            emit("error", message="Data SUPER-I kosong")
+        else:
+            err("No data from SUPER-I")
         return False
 
-    if RICH and console:
+    if embedded:
+        emit("stage_ok", message=f"Data SUPER-I dimuat · {len(superi_data)} item")
+    elif RICH and console:
         console.print(f"  [bold green]✓[/] Got [bold bright_yellow]{len(superi_data)}[/] items from SUPER-I")
     else:
         ok(f"Got {len(superi_data)} items from SUPER-I")
 
     # 2. Portal PLN: login + fetch grid
-    if RICH and console and sc:
+    emit("stage", message="Masuk ke Portal APD Jakarta...")
+    if embedded:
+        pln = PortalPLN()
+        portal_ok = pln.login()
+    elif RICH and console and sc:
         with console.status(f"[bold bright_yellow]Portal PLN: Logging in...[/]", spinner="dots", spinner_style="bright_yellow"):
             pln = PortalPLN()
             portal_ok = pln.login()
-    else:
+    elif not embedded:
         info("Portal PLN: Logging in...")
         pln = PortalPLN()
         portal_ok = pln.login()
 
     if not portal_ok:
-        err("Portal PLN login failed")
+        if embedded:
+            emit("error", message="Login Portal APD gagal")
+        else:
+            err("Portal PLN login failed")
         return False
 
-    if RICH and console:
+    if embedded:
+        emit("stage_ok", message="Login Portal APD berhasil")
+    elif RICH and console:
         console.print(f"  [bold green]✓[/] Portal PLN login OK")
     else:
         ok("Portal PLN login OK")
 
-    if RICH and console and sc:
+    emit("stage", message="Memuat data Portal APD...")
+    if embedded:
+        grid = pln.fetch_grid(data_type, date_str)
+    elif RICH and console and sc:
         with console.status(f"[bold bright_yellow]Portal PLN: Fetching grid...[/]", spinner="dots", spinner_style="bright_yellow"):
             grid = pln.fetch_grid(data_type, date_str)
-    else:
+    elif not embedded:
         info("Portal PLN: Fetching grid...")
         grid = pln.fetch_grid(data_type, date_str)
 
     if not grid:
-        err("Portal PLN grid fetch failed")
+        if embedded:
+            emit("error", message="Data Portal APD gagal dimuat")
+        else:
+            err("Portal PLN grid fetch failed")
         return False
 
-    if RICH and console:
+    if embedded:
+        emit("stage_ok", message=f"Data Portal APD dimuat · {len(grid)} item")
+    elif RICH and console:
         console.print(f"  [bold green]✓[/] Got [bold bright_yellow]{len(grid)}[/] items from Portal PLN")
     else:
         ok(f"Got {len(grid)} items from Portal PLN")
@@ -494,19 +546,26 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
     cells_per_item = (n_hours * 2) if data_type == "tegangan" else n_hours
     total_cells = len(superi_data) * cells_per_item
 
-    if RICH and console:
+    def report_progress(done: int, name: str = ""):
+        if progress_callback is not None:
+            progress_callback(done, total_cells, name)
+
+    if embedded:
+        emit("stage", message=f"Memproses {total_cells} sel data...")
+    elif RICH and console:
         console.print(f"  Mode [{mode_style}]{mode_label}[/] · Jam [bold bright_yellow]{jam_start:02d}-{jam_end:02d}[/] · {len(superi_data)} item · {total_cells} cell")
     else:
         mode = f"\033[93mDRY-RUN\033[0m" if dry_run else f"\033[92mLIVE\033[0m"
         info(f"Mode {mode} · Jam {jam_start:02d}-{jam_end:02d} · {len(superi_data)} item · {total_cells} cell")
 
-    if RICH and console:
+    if not embedded and RICH and console:
         console.print()
 
     updates = 0; errors = 0; skipped = 0
     error_list = []
     dry_samples = []
     done = 0
+    report_progress(0)
 
     def _normalize(s: str) -> str:
         return ''.join(s.upper().split())
@@ -516,7 +575,7 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
     # Rich progress setup for LIVE mode
     rich_prog = None
     rich_task = None
-    use_rich_prog = RICH and not dry_run and console and console.is_terminal
+    use_rich_prog = RICH and not embedded and not dry_run and console and console.is_terminal
 
     if use_rich_prog:
         try:
@@ -551,12 +610,13 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
         if rowdata is None:
             skipped += cells_per_item
             done += cells_per_item
+            report_progress(done, name)
             if rich_prog and rich_task is not None:
                 try:
                     rich_prog.update(rich_task, completed=done, extra=name[:16])
                 except Exception:
                     pass
-            elif not dry_run:
+            elif not dry_run and progress_callback is None:
                 live_progress(done, total_cells, name)
             continue
 
@@ -582,12 +642,13 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                 else:
                     skipped += 1
                 done += 1
+                report_progress(done, name)
                 if rich_prog and rich_task is not None:
                     try:
                         rich_prog.update(rich_task, completed=done, extra=name[:16])
                     except Exception:
                         pass
-                elif not dry_run:
+                elif not dry_run and progress_callback is None:
                     live_progress(done, total_cells, name)
 
                 if h < len(hv_vals) and hv_vals[h] is not None:
@@ -608,12 +669,13 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                 else:
                     skipped += 1
                 done += 1
+                report_progress(done, name)
                 if rich_prog and rich_task is not None:
                     try:
                         rich_prog.update(rich_task, completed=done, extra=name[:16])
                     except Exception:
                         pass
-                elif not dry_run:
+                elif not dry_run and progress_callback is None:
                     live_progress(done, total_cells, name)
         else:
             jams = values if isinstance(values, list) else []
@@ -621,12 +683,13 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                 if h >= len(jams) or jams[h] is None:
                     skipped += 1
                     done += 1
+                    report_progress(done, name)
                     if rich_prog and rich_task is not None:
                         try:
                             rich_prog.update(rich_task, completed=done, extra=name[:16])
                         except Exception:
                             pass
-                    elif not dry_run:
+                    elif not dry_run and progress_callback is None:
                         live_progress(done, total_cells, name)
                     continue
                 col = f"j{h:02d}"
@@ -644,12 +707,13 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                         errors += 1; error_list.append(f"{name} {col}={jams[h]}")
                     _h_sleep(0.5, 1.9)
                 done += 1
+                report_progress(done, name)
                 if rich_prog and rich_task is not None:
                     try:
                         rich_prog.update(rich_task, completed=done, extra=name[:16])
                     except Exception:
                         pass
-                elif not dry_run:
+                elif not dry_run and progress_callback is None:
                     live_progress(done, total_cells, name)
 
     # End live bar, summary
@@ -658,13 +722,25 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
             rich_prog.stop()
         except Exception:
             pass
-    if not dry_run and not rich_prog:
+    if not dry_run and not rich_prog and progress_callback is None:
         print()
 
-    summary_box(type_labels[data_type], updates, errors, skipped, total_cells)
+    emit(
+        "summary",
+        label=type_labels[data_type],
+        updated=updates,
+        failed=errors,
+        skipped=skipped,
+        total=total_cells,
+    )
+    if not embedded:
+        summary_box(type_labels[data_type], updates, errors, skipped, total_cells)
 
     if dry_run and dry_samples:
-        if RICH and console:
+        if embedded:
+            for sample in dry_samples:
+                emit("sample", message=sample)
+        elif RICH and console:
             console.print(f"  [dim]Contoh perubahan:[/]")
             for s in dry_samples:
                 console.print(f"    [cyan]{s}[/]")
@@ -674,7 +750,10 @@ def do_sync(data_type: str, jam_start: int, jam_end: int, date_str: str, dry_run
                 print(f"    {s}")
 
     if error_list:
-        warn(f"{len(error_list)} error: " + "; ".join(error_list[:5]) + (" …" if len(error_list) > 5 else ""))
+        if embedded:
+            emit("warning", message=f"{len(error_list)} sel gagal diperbarui", details=error_list[:5])
+        else:
+            warn(f"{len(error_list)} error: " + "; ".join(error_list[:5]) + (" …" if len(error_list) > 5 else ""))
 
     return errors == 0
 

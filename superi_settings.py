@@ -404,7 +404,7 @@ Foto manual membedakan panel fisik setiap penyulang dan trafo. Mode pool lebih c
 ## Transformasi output
 - Ukuran 720x720 dengan crop jitter.
 - JPEG baseline quality 82-93 tanpa EXIF.
-- Varian: asli 40%, blur ringan 20%, blur berat 10%, glare 15%, noisy gelap 15%.
+- Varian: asli 45%, blur ringan 25%, blur berat 15%, noisy gelap 15%.
 - Filename upload tetap humanized.
 
 ## CB OFF dan lifecycle

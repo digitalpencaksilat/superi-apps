@@ -335,7 +335,7 @@ def main():
     print("           re-encode 720x720 crop ±5% + pixel jitter + quality 82-93 beda SHA tiap upload")
     print("           filename tetap humanizer: fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg")
     print("    manual = per-item sesuai (random dari folder item + hv/mv terpisah + varian)")
-    print("           CASABLANCA4 → 12 foto random → blur_ringan 20% / blur_berat 10% / kabur_glare 15% / noisy_gelap 15% / asli 40%")
+    print("           CASABLANCA4 → 12 foto random → blur_ringan 25% / blur_berat 15% / noisy_gelap 15% / asli 45%")
     print("           TRAFO_1 hv: 9 foto di TRAFO_1/hv/ → random, mv: 7 foto di TRAFO_1/mv/ → random pisah")
     print("           filename tetap humanizer, OFF tetap simpan 84 foto tapi skip input CB OFF")
     print("           Foto tidak dihapus setelah dipakai (read-only random choice)")

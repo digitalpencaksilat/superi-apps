@@ -18,7 +18,7 @@ from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
-from textual.widgets import DataTable, Input, Markdown, RichLog, Static
+from textual.widgets import DataTable, Input, Markdown, ProgressBar, RichLog, Static
 from textual.worker import Worker, WorkerState
 
 import superi_console as sc
@@ -451,6 +451,42 @@ class SuperITui(App[None]):
         scrollbar-color: $amber;
     }
 
+    #sync-progress-panel {
+        display: none;
+        width: 100%;
+        height: 5;
+        padding: 0 2;
+        border: round $amber-soft;
+        background: #080808;
+    }
+
+    #sync-progress-panel.active {
+        display: block;
+    }
+
+    #sync-progress-label {
+        height: 1;
+        color: $amber;
+        text-style: bold;
+    }
+
+    #sync-progress {
+        width: 100%;
+        height: 1;
+        color: $amber;
+        background: #24200f;
+    }
+
+    #sync-progress-panel.success #sync-progress-label,
+    #sync-progress-panel.success #sync-progress {
+        color: #66bb6a;
+    }
+
+    #sync-progress-panel.failed #sync-progress-label,
+    #sync-progress-panel.failed #sync-progress {
+        color: #ef5350;
+    }
+
     .native-markdown {
         height: auto;
         min-height: 20;
@@ -613,6 +649,9 @@ class SuperITui(App[None]):
                         yield StatusCard("KONFIGURASI", id="sync-config-card")
                         yield StatusCard("RINGKASAN", id="sync-summary-card")
                         yield StatusCard("AKSI", id="sync-actions-card")
+                    with Vertical(id="sync-progress-panel"):
+                        yield Static("Menunggu proses sync", id="sync-progress-label")
+                        yield ProgressBar(total=100, show_eta=False, id="sync-progress")
                     yield RichLog(id="sync-log", classes="native-log sync-log", markup=True, wrap=True, highlight=False)
                 with Vertical(id="setup-view", classes="native-view"):
                     yield Static("MENU UTAMA / AKUN & SESI / SETUP KREDENSIAL", classes="native-heading")
@@ -901,7 +940,7 @@ class SuperITui(App[None]):
             "Output              [bold yellow]720 × 720[/]\n"
             "JPEG Quality        82-93\n"
             "Filename            [bold yellow]HUMANIZED[/]\n"
-            "Varian              asli / blur / glare / noisy"
+            "Varian              asli / blur / noisy"
         )
         self.query_one("#photo-actions-card", Static).update(
             "[bold #ffc107][1][/] Ganti Sumber Foto        [bold #ffc107][2][/] Ganti History\n"
@@ -2086,8 +2125,15 @@ class SuperITui(App[None]):
             "[dim]Detail proses tersedia pada log di bawah.[/]"
         )
         self.show_sync_view(push=False)
+        progress_panel = self.query_one("#sync-progress-panel")
+        progress_panel.remove_class("success", "failed")
+        progress_panel.add_class("active")
+        self.query_one("#sync-progress", ProgressBar).update(total=100, progress=0)
+        self.query_one("#sync-progress-label", Static).update(f"{mode} · Menyiapkan koneksi...")
         self.current_view = "sync-running"
         self._sync_offer_live = bool(offer_live)
+        self._sync_last_ok = False
+        self._sync_results = []
         self.set_busy_prompt(f"{mode.title()} sedang berjalan...")
 
         def work():
@@ -2098,10 +2144,39 @@ class SuperITui(App[None]):
                 # Rich live rendering targets the real terminal; plain ANSI output is
                 # safely forwarded line-by-line into the Textual log viewport.
                 superi_sync.RICH = False
-                for data_type in types:
-                    results.append(superi_sync.do_sync(data_type, start, end, date, dry_run=dry_run))
+                labels = {"penyulang": "Beban Penyulang", "trafo": "Beban Trafo", "tegangan": "Tegangan Trafo"}
+                for index, data_type in enumerate(types, start=1):
+                    label = labels[data_type]
+
+                    def update_progress(done, total, item, *, index=index, label=label):
+                        self.call_from_thread(
+                            self._update_sync_progress,
+                            index,
+                            len(types),
+                            label,
+                            done,
+                            total,
+                            item,
+                        )
+
+                    def sync_event(event, data, *, index=index):
+                        self.call_from_thread(self._write_sync_event, event, data, index, len(types))
+
+                    results.append(
+                        superi_sync.do_sync(
+                            data_type,
+                            start,
+                            end,
+                            date,
+                            dry_run=dry_run,
+                            progress_callback=update_progress,
+                            event_callback=sync_event,
+                        )
+                    )
                 ok = all(results)
+                self._sync_results = results
                 self._sync_last_ok = ok
+                self.call_from_thread(self._write_sync_final, results)
                 status = "PREVIEW SIAP" if dry_run and ok else "SELESAI" if ok else "SEBAGIAN GAGAL"
                 style = "green" if ok else "yellow"
                 self.pending_values["sync-summary"] = (
@@ -2116,6 +2191,59 @@ class SuperITui(App[None]):
                 superi_sync.RICH = old_rich
 
         self.run_worker(work, thread=True, name="sync-operation", exclusive=True, exit_on_error=False)
+
+    def _update_sync_progress(
+        self,
+        index: int,
+        type_count: int,
+        label: str,
+        done: int,
+        total: int,
+        item: str,
+    ):
+        total = max(total, 1)
+        self.query_one("#sync-progress", ProgressBar).update(total=total, progress=min(done, total))
+        item_text = f" · {escape(item)}" if item else ""
+        self.query_one("#sync-progress-label", Static).update(
+            f"Jenis {index}/{type_count} · {escape(label)} · {done}/{total} cell{item_text}"
+        )
+
+    def _write_sync_event(self, event: str, data: dict, index: int, type_count: int):
+        log = self.query_one("#sync-log", RichLog)
+        if event == "section":
+            if index > 1:
+                log.write("")
+            log.write(f"[bold #ffc107]{escape(data['label']).upper()}[/]")
+        elif event == "stage":
+            log.write(f"  [cyan]·[/] {escape(data['message'])}")
+        elif event == "stage_ok":
+            log.write(f"  [bold green]✓[/] {escape(data['message'])}")
+        elif event == "error":
+            log.write(f"  [bold red]✗[/] {escape(data['message'])}")
+        elif event == "sample":
+            log.write(f"  [cyan]•[/] {escape(data['message'])}")
+        elif event == "warning":
+            log.write(f"  [bold yellow]⚠[/] {escape(data['message'])}")
+            for detail in data.get("details", ()):
+                log.write(f"    [dim]• {escape(detail)}[/]")
+        elif event == "summary":
+            style = "green" if data["failed"] == 0 else "yellow"
+            log.write(
+                f"  [bold {style}]Selesai[/] · "
+                f"[green]{data['updated']} diperbarui[/] · "
+                f"[dim]{data['skipped']} dilewati[/] · "
+                f"[{'red' if data['failed'] else 'dim'}]{data['failed']} gagal[/]"
+            )
+
+    def _write_sync_final(self, results):
+        completed = sum(bool(result) for result in results)
+        style = "green" if completed == len(results) else "yellow"
+        log = self.query_one("#sync-log", RichLog)
+        log.write("")
+        log.write("[bold #ffc107]HASIL AKHIR[/]")
+        log.write(
+            f"  [bold {style}]{completed}/{len(results)} jenis berhasil[/]"
+        )
 
     def _handle_scheduler_action(self, value: str):
         if value == "0":
@@ -2316,6 +2444,17 @@ class SuperITui(App[None]):
                 self.query_one("#manual-input-summary", Static).update(
                     f"[bold red]GAGAL MEMUAT ITEM[/] · [dim]{escape(str(event.worker.error))}[/]"
                 )
+                self.query_one("#sync-progress-label", Static).update(
+                    f"GAGAL · {message}"
+                )
+            elif event.state == WorkerState.SUCCESS:
+                ok = getattr(self, "_sync_last_ok", False)
+                results = getattr(self, "_sync_results", [])
+                completed = sum(bool(result) for result in results)
+                status = "SELESAI" if ok else "SEBAGIAN GAGAL"
+                self.query_one("#sync-progress-label", Static).update(
+                    f"{status} · {completed}/{len(results)} jenis berhasil"
+                )
             else:
                 items = self.pending_values.get("manual-items", ())
                 self._render_manual_input_table(data_type, items)
@@ -2418,6 +2557,11 @@ class SuperITui(App[None]):
                     "Status             [bold red]GAGAL[/]\n"
                     f"[dim]{message}[/]"
                 )
+            progress_panel = self.query_one("#sync-progress-panel")
+            if event.state == WorkerState.SUCCESS and getattr(self, "_sync_last_ok", False):
+                progress_panel.add_class("success")
+            else:
+                progress_panel.add_class("failed")
             self.show_sync_view(push=False)
             if event.state == WorkerState.SUCCESS and offer_live and getattr(self, "_sync_last_ok", False):
                 self.pending_editor = "sync-live-confirm"

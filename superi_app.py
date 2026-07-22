@@ -685,7 +685,7 @@ def api_post_multipart(token, path, data_dict, file_bytes, file_field, num_photo
 
     - Content bytes: dari photo/manual/{data_type}/{ITEM}/ random (jika manual mode + item_name)
       atau dari photo/pool/ 1 foto untuk semua (jika pool mode)
-      + varian blur/kabur/asli/noisy_gelap random 40/20/10/15/15
+      + varian asli/blur/noisy random 45/25/15/15
     - Filename upload beban memakai humanizer fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg.
       Khusus tegangan, nama part transport wajib fotoHV.jpg dan fotoMV.jpg seperti APK GAMA;
       server tetap menyimpannya dengan nama acak fotoHV/fotoMV_YYYY-MM-DD_<hex>.jpg.
@@ -3059,7 +3059,7 @@ def photo_settings_menu():
             print()
             _cprint(f"  [bold]Pilih sumber foto:[/]")
             _cprint(f"  [bold bright_yellow]pool[/]   = 1 foto generic di photo/pool/ untuk semua input (fallback cepat)")
-            _cprint(f"  [bold bright_yellow]manual[/] = per-item sesuai input (random dari folder item + hv/mv terpisah + varian blur/kabur/asli)")
+            _cprint(f"  [bold bright_yellow]manual[/] = per-item sesuai input (random dari folder item + hv/mv terpisah + varian asli/blur/noisy)")
             _cprint(f"  [dim]Filename upload tetap humanizer: fotoBebanPenyulang_YYYY-MM-DD_<hex>.jpg (bukan basename manual)[/]")
             _cprint(f"  [dim]Foto tidak dihapus setelah dipakai (read-only random choice)[/]")
             _cprint(f"  [dim]OFF tetap simpan tapi skip input saat CB OFF[/]")
@@ -3070,7 +3070,7 @@ def photo_settings_menu():
                     _cprint(f"\n  [bold green]✓ Foto source diubah ke {new_src.upper()}[/]")
                     if new_src == "manual":
                         _cprint(f"  [dim]  → Per-item: random dari photo/manual/{{tipe}}/{{ITEM}}/ + hv/mv terpisah[/]")
-                        _cprint(f"  [dim]  → Varian: asli 40%, blur_ringan 20%, blur_berat 10%, kabur_glare 15%, noisy_gelap 15%[/]")
+                        _cprint(f"  [dim]  → Varian: asli 45%, blur_ringan 25%, blur_berat 15%, noisy_gelap 15%[/]")
                         _cprint(f"  [dim]  → OFF 7 penyulang tetap ada tapi skip input CB OFF[/]")
                     else:
                         _cprint(f"  [dim]  → 1 foto generic di photo/pool/ untuk semua input[/]")
@@ -3198,10 +3198,10 @@ def photo_settings_menu():
   - HP mode biasa, jangan portrait blur bawaan, size >100KB ideal
   - Taruh di: photo/manual/{{tipe}}/{{NAMA}}/ (auto random per input)
 
-  [bold]Varian blur/kabur/asli?[/]
+  [bold]Varian blur/asli/noisy?[/]
   - Saat input CLI, dari folder item tersebut di-random 1 foto
-  - Lalu di-apply varian random: asli 40%, blur ringan 20%, blur berat 10%,
-    kabur glare 15% (pantulan lampu), noisy gelap 15% (cocok jam 00-06)
+  - Lalu di-apply varian random: asli 45%, blur ringan 25%, blur berat 15%,
+    noisy gelap 15% (cocok jam 00-06)
   - Crop center square 720x720 jitter ±5% + pixel jitter 2-6 titik
   - Re-encode baseline JPEG quality 82-93, exif=b'', progressive=False
   - Size 20-60KB (match audit server 14-51KB avg 27KB)
