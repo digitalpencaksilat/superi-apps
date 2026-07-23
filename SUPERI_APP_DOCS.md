@@ -344,10 +344,10 @@ python3 ~/superi_app.py
   [5] Input Beban Trafo
   [6] Input Tegangan Trafo
 
-  ═══════════ BATCH ═══════════
-  [7] Batch Fill Beban Penyulang
-  [8] Batch Fill Beban Trafo
-  [9] Batch Fill Tegangan Trafo
+  ═══════ BATCH PER JAM ═══════
+  [A] Beban Penyulang
+  [B] Beban Trafo
+  [C] Tegangan Trafo
 
   ═══════════ LAIN ═══════════
   [G] Ganti Tanggal
@@ -362,7 +362,8 @@ python3 ~/superi_app.py
 4. Nilai disarankan dari **periode 1 jam sebelumnya** — tekan Enter untuk terima
 5. Konfirmasi → data terkirim
 
-**Batch fill:** isi semua periode kosong untuk satu item dengan satu nilai.
+**Batch per jam:** pilih satu periode, tinjau Smart Suggest untuk semua item kosong,
+jalankan input dengan progress, lalu lanjutkan Sync Portal bila diperlukan.
 
 ### 5.2 Script CLI (`superi_input.py`)
 

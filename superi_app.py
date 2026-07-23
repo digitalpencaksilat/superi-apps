@@ -1848,291 +1848,6 @@ def sync_portal_menu(date_str):
         _cprint(f"  [bold bright_yellow]⚠ Sebagian sync gagal — cek detail di atas[/]")
     sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
 
-def batch_fill(token, data_type, gi_id, date_str, user_info):
-    """Isi semua periode kosong untuk satu item."""
-    ep = ENDPOINTS[data_type]
-    
-    result = api_get(token, ep["list"], {"garduIndukId": gi_id, "date": date_str})
-    items = result["data"].get("items", [])
-    
-    clear()
-    header(f"⚡ BATCH FILL · {ep['label']}")
-    print()
-    
-    if not _rich_print_table(items, data_type, kind="item"):
-        if ui:
-            for ln in ui.render_item_table(items, data_type):
-                print(ln)
-        else:
-            for i, item in enumerate(items, 1):
-                data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
-                periods = [e["periode"] for e in item.get(data_key, [])]
-                print(f"  [{i}] {item['nama']} - {len(periods)}/24")
-
-    if sc and getattr(sc, 'console', None):
-        try:
-            sc.console.print()
-        except Exception:
-            print()
-    else:
-        print()
-    try:
-        if sc is not None:
-            idx_str = sc.prompt_ask("Pilih nomor item")
-            idx = int(idx_str) - 1
-        else:
-            idx = int(input("  Pilih nomor item: ").strip()) - 1
-        if idx < 0 or idx >= len(items):
-            return
-    except ValueError:
-        return
-    
-    item = items[idx]
-    
-    # Tolak CB OFF
-    if item.get('statusCB') == 'OFF':
-        print(f"\n  ⛔ {item['nama']} CB OFF — tidak bisa input beban!")
-        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
-        return
-    
-    data_key = "tegangan" if data_type == "tegangan-trafo" else "beban"
-    entries = item.get(data_key, [])
-    periods_filled = [e["periode"] for e in entries]
-    empty_periods = [p for p in range(24) if p not in periods_filled]
-    
-    if not empty_periods:
-        print(f"\n  ✓ {item['nama']} sudah 24/24!")
-        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
-        return
-    
-    # Hitung nilai dari periode terisi tertinggi (suggest value)
-    # Untuk beban: pakai SMART SUGGEST (weekday/weekend aware)
-    if entries:
-        sorted_entries = sorted(entries, key=lambda x: x["periode"])
-        last_entry = sorted_entries[-1]
-        if data_type == "tegangan-trafo":
-            last_mv = last_entry["mv"]
-            last_hv = last_entry["hv"]
-        else:
-            last_val = last_entry["beban"]
-    
-    print(f"\n  Target: {item['nama']} ({len(empty_periods)} periode kosong)")
-    print(f"  Periode: {empty_periods}")
-    
-    if data_type == "tegangan-trafo":
-        # Tegangan: SMART SUGGEST per-periode (rata-rata histori, bukan copy periode sebelumnya)
-        today = datetime.strptime(date_str, "%Y-%m-%d")
-        is_weekend = today.weekday() >= 5
-        day_label = "Weekend" if is_weekend else "Weekday"
-        
-        print(f"    🧠 Menganalisis pola {get_history_days()} hari ({day_label})...")
-        cache = fetch_history_bulk(token, data_type, gi_id, date_str)
-        
-        # Hitung suggest per-periode
-        teg_suggestions = {}
-        for per in empty_periods:
-            mv, hv, info = smart_suggest_tegangan_from_cache(cache, item["id"], per, is_weekend)
-            teg_suggestions[per] = (mv, hv, info)
-        
-        # Tampilkan tabel
-        print(f"\n  {'Periode':<10}{'MV':>8}{'HV':>8}  {'Info'}")
-        print(f"  {'─' * 55}")
-        for per in empty_periods:
-            mv, hv, info = teg_suggestions[per]
-            if mv is not None:
-                print(f"  P{per:02d}       {mv:>8}{hv:>8}  {info}")
-            else:
-                print(f"  P{per:02d}       {'?':>8}{'?':>8}  (tidak ada histori)")
-        
-        # Edit?
-        edit = input("\n  Edit nilai? (y/N): ").strip().lower()
-        if edit == 'y':
-            for per in empty_periods:
-                mv_cur, hv_cur, _ = teg_suggestions[per]
-                mv_str = input(f"  P{per:02d} MV [{mv_cur}]: ").strip()
-                hv_str = input(f"  P{per:02d} HV [{hv_cur}]: ").strip()
-                teg_suggestions[per] = (
-                    float(mv_str) if mv_str else mv_cur,
-                    float(hv_str) if hv_str else hv_cur,
-                    "edited"
-                )
-        
-        # Filter valid
-        valid_periods = [p for p in empty_periods if teg_suggestions[p][0] is not None]
-        if not valid_periods:
-            _cprint(f"  [bold red]✗ Tidak ada nilai valid![/]")
-            sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
-            return
-        
-        if not confirm(f"\n  Isi {len(valid_periods)} periode tegangan {item['nama']}?"):
-            return
-
-        # batch per-item (beda jam, 1 item) -> reset tiap jam agar tetap spacing 10-20s jika di-run secepatnya per jam
-        # tapi untuk beda periode, gap antar jam tidak krusial, jadi cukup reset per periode
-        dt = datetime.strptime(date_str, "%Y-%m-%d")
-        success = 0
-        fail = 0
-        total = len(valid_periods)
-        for i, per in enumerate(valid_periods, 1):
-            if hu and hasattr(hu, "reset_foto_sequence"):
-                try:
-                    hu.reset_foto_sequence(date_str, per)
-                except Exception:
-                    pass
-            mv, hv, _ = teg_suggestions[per]
-            durasi = _human_durasi(data_type)
-            fotoHV, fotoMV = _human_foto_pair_dicts(date_str, per, durasi)
-            data_dict = {
-                ep["id_field"]: item["id"],
-                "timezone": "Asia/Jakarta",
-                "periode": per,
-                "tanggal": dt.day,
-                "bulan": dt.month - 1,
-                "tahun": dt.year,
-                "durasi": durasi,
-                ep["value_field"]: mv,
-                "hv": hv,
-                "fotoHV": fotoHV,
-                "fotoMV": fotoMV,
-            }
-            # Foto: random dari manual (per-item) atau pool (1 foto semua) + varian blur/kabur/asli, filename tetap humanizer
-            status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"], item_name=item["nama"])
-            ok = result.get("success")
-            photo_check = result.get("_photo_upload")
-            # Log foto source untuk transparansi anti-robotik
-            foto_log = ""
-            try:
-                if hu and hasattr(hu, "get_last_meta"):
-                    meta = hu.get_last_meta()
-                    src_bn = meta.get("src_basename", "")[:32]
-                    var = meta.get("variant", "")
-                    src_mode = meta.get("source_mode", "")
-                    if src_bn:
-                        foto_log = f" | 📷 {src_bn} [{var}] ({src_mode})"
-            except:
-                pass
-            if ok and photo_check and not photo_check.get("ok"):
-                # Hapus record foto gagal agar tidak jadi sampah MISSING uri
-                try:
-                    rec_id = (result.get("data") or {}).get("id")
-                    if rec_id:
-                        api_delete(token, f"{ep['delete']}/{rec_id}")
-                except Exception:
-                    pass
-                detail = f"FOTO GAGAL: {photo_check.get('error', '?')} -> dihapus"
-                ok = False
-            else:
-                detail = f"MV={mv} HV={hv}{foto_log}" if ok else str(result.get("message", "?"))[:30]
-            if sc and getattr(sc, 'console', None) and getattr(sc, 'RICH_AVAILABLE', False):
-                try:
-                    sc.console.print(f"  [{'green' if ok else 'red'}]{'[OK]' if ok else '[FAIL]' } P{per:02d} {detail[:60]}[/]")
-                except Exception:
-                    if ui:
-                        sys.stdout.write("\r" + ui.fmt_progress_line(i, total, f"P{per:02d}", ok=ok, detail=detail))
-                        sys.stdout.flush()
-            else:
-                if ui:
-                    sys.stdout.write("\r" + ui.fmt_progress_line(i, total, f"P{per:02d}", ok=ok, detail=detail))
-                    sys.stdout.flush()
-            if ok:
-                success += 1
-            else:
-                fail += 1
-            if i < total:
-                _human_sleep(0.8, 3.2)
-        if ui:
-            sys.stdout.write("\n")
-        print()
-        _print_summary_rich(success, fail, total, "tegangan")
-        
-        # Tawarkan sync ke Portal PLN
-        if success > 0:
-            offer_portal_sync(data_type, valid_periods, date_str)
-        
-        sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
-        return
-    else:
-        # Beban: SMART SUGGEST untuk satu nilai yang dipakai di semua periode kosong
-        # Pakai periode pertama kosong sebagai referensi — pakai gi_id biar tidak hardcoded 222
-        ref_periode = empty_periods[0]
-        print(f"    🧠 Menganalisis pola {get_history_days()} hari untuk P{ref_periode:02d}...")
-        smart_val, info = smart_suggest_value(token, data_type, item["id"], ref_periode, date_str, gi_id=gi_id)
-        if smart_val is not None:
-            print(f"    → Smart suggest: {smart_val}A ({info})")
-            val_str = input(f"  Nilai (Ampere) [smart: {smart_val}]: ").strip()
-            value = float(val_str) if val_str else smart_val
-        elif entries:
-            print(f"    → Fallback ke P{last_entry['periode']:02d}: {last_val}A")
-            val_str = input(f"  Nilai (Ampere) [P{last_entry['periode']:02d}: {last_val}]: ").strip()
-            value = float(val_str) if val_str else last_val
-        else:
-            val_str = input(f"  Nilai (Ampere): ").strip()
-            value = float(val_str)
-    
-    if not confirm(f"\n  Isi {len(empty_periods)} periode dgn nilai {value}{ep['unit']}?"):
-        return
-
-    dt = datetime.strptime(date_str, "%Y-%m-%d")
-    success = 0
-    fail = 0
-    total = len(empty_periods)
-    for i, per in enumerate(empty_periods, 1):
-        # Untuk batch per-item (beda jam), reset tracker per periode agar spacing historis tetap terjaga
-        if hu and hasattr(hu, "reset_foto_sequence"):
-            try:
-                hu.reset_foto_sequence(date_str, per)
-            except Exception:
-                pass
-        durasi = _human_durasi(data_type)
-        data_dict = {
-            ep["id_field"]: item["id"],
-            "timezone": "Asia/Jakarta",
-            "periode": per,
-            "tanggal": dt.day,
-            "bulan": dt.month - 1,
-            "tahun": dt.year,
-            "durasi": durasi,
-            ep["value_field"]: value,
-            "foto": _human_foto_dict(date_str, per, durasi, data_type),
-        }
-        status, result = api_post_multipart(token, ep["input"], data_dict, DUMMY_JPEG, ep["file_field"], ep["num_photos"], item_name=item["nama"])
-        ok = result.get("success")
-        foto_log = ""
-        try:
-            if hu and hasattr(hu, "get_last_meta"):
-                meta = hu.get_last_meta()
-                src_bn = meta.get("src_basename", "")[:32]
-                var = meta.get("variant", "")
-                src_mode = meta.get("source_mode", "")
-                if src_bn:
-                    foto_log = f" | 📷 {src_bn} [{var}] ({src_mode})"
-        except:
-            pass
-        detail = f"{value}A{foto_log}" if ok else str(result.get("message", "?"))[:30]
-        if ui:
-            sys.stdout.write("\r" + ui.fmt_progress_line(i, total, f"P{per:02d}", ok=ok, detail=detail))
-            sys.stdout.flush()
-        if ok:
-            success += 1
-        else:
-            fail += 1
-        if i < total:
-            _human_sleep(0.8, 3.2)
-    if ui:
-        sys.stdout.write("\n")
-    print()
-    _print_summary_rich(success, fail, total, "beban")
-    
-    # Tawarkan sync ke Portal PLN
-    if success > 0:
-        offer_portal_sync(data_type, empty_periods, date_str)
-    
-    sc.pause() if sc and hasattr(sc, 'pause') else input('  [Enter]')
-
-# ============================================================
-# MAIN MENU
-# ============================================================
-
 def batch_fill_periode(token, data_type, gi_id, date_str, user_info):
     """Batch fill per periode: pilih 1 jam → isi semua item kosong di jam itu sekaligus."""
     from concurrent.futures import ThreadPoolExecutor
@@ -3356,10 +3071,10 @@ def main():
                 sc.console.print("  [bold bright_yellow][2][/] Beban Trafo            [bold bright_yellow][5][/] Beban Trafo")
                 sc.console.print("  [bold bright_yellow][3][/] Tegangan Trafo         [bold bright_yellow][6][/] Tegangan Trafo")
                 sc.console.print()
-                sc.console.print("  [bold bright_yellow]BATCH per ITEM[/]             [bold bright_yellow]BATCH per JAM[/] [green](+ Sync Portal)[/]")
-                sc.console.print("  [bold bright_yellow][7][/] Beban Penyulang        [bold bright_yellow][A][/] Beban Penyulang")
-                sc.console.print("  [bold bright_yellow][8][/] Beban Trafo            [bold bright_yellow][B][/] Beban Trafo")
-                sc.console.print("  [bold bright_yellow][9][/] Tegangan Trafo         [bold bright_yellow][C][/] Tegangan Trafo")
+                sc.console.print("  [bold bright_yellow]BATCH per JAM[/] [green](+ Sync Portal)[/]")
+                sc.console.print("  [bold bright_yellow][A][/] Beban Penyulang")
+                sc.console.print("  [bold bright_yellow][B][/] Beban Trafo")
+                sc.console.print("  [bold bright_yellow][C][/] Tegangan Trafo")
                 sc.console.print()
                 sc.console.print("  [bold dim]PENGATURAN[/]")
                 photo_badge = f"[bold green]{_photo_src.upper()}[/]" if _photo_src=="manual" else f"[bold yellow]{_photo_src.upper()}[/]"
@@ -3377,10 +3092,10 @@ def main():
                 _cprint(f"  [bold bright_yellow][2][/] Beban Trafo            [bold bright_yellow][5][/] Beban Trafo")
                 _cprint(f"  [bold bright_yellow][3][/] Tegangan Trafo         [bold bright_yellow][6][/] Tegangan Trafo")
                 print()
-                _cprint(f"  [bold bright_yellow][bold]BATCH per ITEM[/]             [bold bright_yellow][bold]BATCH per JAM[/] [bold green](+ Sync Portal)[/]")
-                _cprint(f"  [bold bright_yellow][7][/] Beban Penyulang        [bold bright_yellow][A][/] Beban Penyulang")
-                _cprint(f"  [bold bright_yellow][8][/] Beban Trafo            [bold bright_yellow][B][/] Beban Trafo")
-                _cprint(f"  [bold bright_yellow][9][/] Tegangan Trafo         [bold bright_yellow][C][/] Tegangan Trafo")
+                _cprint(f"  [bold bright_yellow][bold]BATCH per JAM[/] [bold green](+ Sync Portal)[/]")
+                _cprint(f"  [bold bright_yellow][A][/] Beban Penyulang")
+                _cprint(f"  [bold bright_yellow][B][/] Beban Trafo")
+                _cprint(f"  [bold bright_yellow][C][/] Tegangan Trafo")
                 print()
                 _photo_badge = f"[bold green]{_photo_src.upper()}[/]" if _photo_src=="manual" else f"[bold bright_yellow]{_photo_src.upper()}[/]"
                 _cprint(f"  [dim][bold]PENGATURAN[/]")
@@ -3398,10 +3113,10 @@ def main():
             _cprint(f"  [bold bright_yellow][2][/] Beban Trafo            [bold bright_yellow][5][/] Beban Trafo")
             _cprint(f"  [bold bright_yellow][3][/] Tegangan Trafo         [bold bright_yellow][6][/] Tegangan Trafo")
             print()
-            _cprint(f"  [bold bright_yellow][bold]BATCH per ITEM[/]             [bold bright_yellow][bold]BATCH per JAM[/] [bold green](+ Sync Portal)[/]")
-            _cprint(f"  [bold bright_yellow][7][/] Beban Penyulang        [bold bright_yellow][A][/] Beban Penyulang")
-            _cprint(f"  [bold bright_yellow][8][/] Beban Trafo            [bold bright_yellow][B][/] Beban Trafo")
-            _cprint(f"  [bold bright_yellow][9][/] Tegangan Trafo         [bold bright_yellow][C][/] Tegangan Trafo")
+            _cprint(f"  [bold bright_yellow][bold]BATCH per JAM[/] [bold green](+ Sync Portal)[/]")
+            _cprint(f"  [bold bright_yellow][A][/] Beban Penyulang")
+            _cprint(f"  [bold bright_yellow][B][/] Beban Trafo")
+            _cprint(f"  [bold bright_yellow][C][/] Tegangan Trafo")
             print()
             _photo_badge = f"[bold green]{_photo_src.upper()}[/]" if _photo_src=="manual" else f"[bold bright_yellow]{_photo_src.upper()}[/]"
             _cprint(f"  [dim][bold]PENGATURAN[/]")
@@ -3419,7 +3134,7 @@ def main():
             break
         
         # Login if needed
-        if choice in '123456789abc' and not token:
+        if choice in '123456abc' and not token:
             print("\n  Login...")
             token, user, gi_id = do_login(config)
             if not token:
@@ -3448,12 +3163,6 @@ def main():
                 input_single(token, "beban-trafo", gi_id, date_str, user)
             elif choice == '6':
                 input_single(token, "tegangan-trafo", gi_id, date_str, user)
-            elif choice == '7':
-                batch_fill(token, "beban-penyulang", gi_id, date_str, user)
-            elif choice == '8':
-                batch_fill(token, "beban-trafo", gi_id, date_str, user)
-            elif choice == '9':
-                batch_fill(token, "tegangan-trafo", gi_id, date_str, user)
             elif choice == 'a':
                 batch_fill_periode(token, "beban-penyulang", gi_id, date_str, user)
             elif choice == 'b':

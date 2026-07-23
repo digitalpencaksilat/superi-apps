@@ -24,6 +24,10 @@ class BatchOverview:
     def incomplete_periods(self) -> int:
         return sum(bool(items) for items in self.empty_by_period)
 
+    @property
+    def actionable_periods(self) -> tuple[int, ...]:
+        return tuple(period for period, items in enumerate(self.empty_by_period) if items)
+
 
 @dataclass
 class BatchSuggestion:

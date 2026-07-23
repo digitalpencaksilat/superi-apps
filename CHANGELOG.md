@@ -5,6 +5,57 @@ Semua perubahan penting pada project ini akan didokumentasikan di file ini.
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/id/1.1.0),
 dan project ini menggunakan [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.5.0] — 2026-07-23
+
+### Added
+
+- Guided workflow Batch per Jam di TUI: context header dinamis, progress bar Textual native, indikator `BATCH Pxx:00 · n/m`, elapsed time, dan log streaming per-item.
+- Queue edit selektif untuk Batch per Jam: pilih nomor item `2,5` atau `all`, wajib edit otomatis untuk item tanpa suggest (`PERLU EDIT`), serta konfirmasi submit `Jalankan batch N item di Pxx:00?`.
+- Handoff otomatis Batch → Sync Portal di TUI dengan state `batch-sync-guided`: preview dry-run otomatis → LIVE sync → ringkasan kembali ke periode, plus pesan `Sync dilewati` dan reload periode saat semua 24 jam penuh.
+- Property baru `BatchOverview.actionable_periods` di `superi_batch.py` yang hanya mengembalikan periode dengan item kosong, dipakai TUI untuk render tabel actionable saja.
+- Validasi ketat: `P00` tetap valid sebagai periode, `Esc=Kembali` di prompt periode, dan prompt jumlah periode menampilkan daftar `00/01/...` yang bisa di-batch.
+- Test regresi baru untuk alur batch baru: analisis otomatis setelah pilih periode, P00 valid, queue edit selektif, skip sync refresh data type yang sama, handoff sync type/date/period.
+- Web: tetap dukung batch per periode dengan suggest weekday/weekend aware, dry-run preview, dan handoff sync portal (tanpa per-item).
+- `tests/test_sync_progress.py`: callback `progress_callback` dan `event_callback` untuk embedded TUI — `progress (done,total,item)` + `events (section/stage/summary)` tanpa output terminal legacy.
+
+### Changed
+
+- **Batch per Item `7/8/9` resmi dihapus** dari seluruh codebase (CLI klasik, TUI, Web, dan docs):
+  - `superi_app.py`: fungsi `batch_fill()` ~300 baris dihapus, menu utama `[7][8][9] Batch per Item` hilang, hanya `[A][B][C] Batch per Jam` tersisa, `choice in '123456789abc'` → `'123456abc'`.
+  - `superi_tui.py`: `MENU_COMMANDS 7/8/9` dihapus, `panel-batch-item` dihapus, `batch-hour` view disederhanakan dari 5-card grid jadi single context + progress panel + tabel, `actionable_periods` dipakai untuk render.
+  - `superi_web.py`: `learn_pattern()` 190 baris + endpoint `/api/data/pattern` + mode `per-item` di `/api/data/batch-input` dihapus; API kini strict `per-periode` saja, return 400 jika `per-item`.
+  - `templates/dashboard.html`: modal `batchModal` per-item lama (200 baris JS + HTML) dihapus, hanya modal `batchPeriode` yang dipertahankan.
+  - `SUPERI_APP_DOCS.md` dan `README.md`: dokumentasi batch diperbarui — hanya `BATCH PER JAM A/B/C`, panel terpisah `Lihat Data, Input Manual, dan Batch per Jam`.
+- TUI Batch per Jam refactor besar:
+  - Dari: 5 status card (Status Data, Periode Terpilih, Smart Suggest, Ringkasan, Aksi) + input `1-6` manual.
+  - Ke: single `#batch-hour-context` + `#batch-hour-progress-panel` (hidden by default, active saat submit) + DataTable. Alur otomatis: pilih periode → analisis Smart Suggest otomatis → tanya ubah nilai → queue edit → submit confirm → progress bar + log → sync confirm.
+  - `_prompt_batch_period()` menampilkan `Pilih periode [00/05/08/...] · Esc=Kembali`.
+  - `_handle_editor_input` untuk periode langsung memanggil `_analyze_batch_period()`.
+  - `_request_batch_submit()` + `_return_to_batch_periods()` + `_start_batch_sync()` flow baru, `view_stack` dibersihkan saat kembali.
+- `superi_batch.py`: tambah 4 baris `actionable_periods` property, refactor `submit_period` dengan progress callback granular dan rollback foto gagal (delete record).
+- `superi_sync.py`: sudah mendukung `progress_callback` dan `event_callback` (embedded mode), no legacy output saat callback aktif.
+- Tests: `test_tui.py` update — hapus assert `panel-batch-item`, tambah test tinggi seragam 8px untuk settings, guided flow, P00 edge case, selective edit queue.
+
+### Removed
+
+- CLI: `batch_fill()` per-item (load items, pilih nomor, empty periods, smart suggest per-periode untuk satu item, edit y/N, submit) — 285 baris.
+- Web: `learn_pattern()` historis per-item, endpoint `/api/data/pattern`, mode `per-item` di batch-input, modal lama `batchModal` dengan JS `showBatchModal/renderBatchTable/submitBatch`.
+- TUI: menu Batch per Item, panel `panel-batch-item`, action handlers `1-6` manual untuk batch, grid 5-card.
+
+### Fixed
+
+- Sinkronisasi tipe `penyulang/trafo/tegangan` dari hasil batch tidak lagi kehilangan context setelah reload period.
+- P00 (tengah malam) yang sebelumnya dianggap falsy (`if period`) dan tidak trigger analisis kini valid.
+- Layout settings card tinggi tidak konsisten — sekarang uniform `8` (wide), `17` (medium), `26` (narrow) via `SuperITui.on_resize`.
+- Web `api_batch_input` yang masih menyisakan `per-item` tidak terdokumentasi kini strict reject dengan pesan `Hanya mode per-periode yang didukung`.
+
+### Verified
+
+- 140+ tests passed termasuk 40+ headless Textual tests untuk guided batch flow.
+- `git diff --check` lulus, Python compile OK.
+- Manual test: `P08` dengan 3 item kosong → pick `00/08` choice → auto analyze → edit selective `2,5` → progress bar update 1/3 → sync handoff dry-run → LIVE → kembali ke periode dengan notif.
+
+
 ## [1.4.0] — 2026-07-18
 
 ### Added

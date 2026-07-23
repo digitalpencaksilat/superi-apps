@@ -45,7 +45,6 @@ class TuiLayoutTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertIsNotNone(app.query_one("#panel-view"))
             self.assertIsNotNone(app.query_one("#panel-input"))
-            self.assertIsNotNone(app.query_one("#panel-batch-item"))
             self.assertIsNotNone(app.query_one("#panel-batch-hour"))
             self.assertIsNotNone(app.query_one("#settings-session"))
             self.assertIsNotNone(app.query_one("#settings-operational"))
@@ -54,6 +53,11 @@ class TuiLayoutTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(sticky.has_focus)
             self.assertEqual(app.query_one("#prompt-panel").styles.height.value, 6)
 
+    def test_batch_per_item_commands_are_removed(self):
+        self.assertNotIn("7", tui.MENU_COMMANDS)
+        self.assertNotIn("8", tui.MENU_COMMANDS)
+        self.assertNotIn("9", tui.MENU_COMMANDS)
+
     async def test_wide_settings_use_three_columns(self):
         app = tui.SuperITui(start_session=False)
         async with app.run_test(size=(120, 40)) as pilot:
@@ -61,6 +65,13 @@ class TuiLayoutTests(unittest.IsolatedAsyncioTestCase):
             settings = app.query_one("#settings-grid")
             self.assertFalse(settings.has_class("settings-medium"))
             self.assertFalse(settings.has_class("settings-narrow"))
+            heights = {
+                app.query_one(selector).size.height
+                for selector in ("#settings-session", "#settings-operational", "#settings-portal")
+            }
+            self.assertEqual(len(heights), 1)
+            for selector in ("#settings-session", "#settings-operational", "#settings-portal"):
+                self.assertEqual(app.query_one(selector).styles.height.value, 8)
 
     async def test_medium_settings_use_two_columns(self):
         app = tui.SuperITui(start_session=False)
@@ -325,6 +336,7 @@ class TuiLayoutTests(unittest.IsolatedAsyncioTestCase):
                     "MENU UTAMA / BATCH PER JAM / BEBAN PENYULANG",
                     str(app.query_one("#batch-hour-heading").render()),
                 )
+                self.assertEqual(app.pending_editor, "batch-period")
                 classic.assert_not_called()
 
     async def test_batch_voltage_suggestions_use_mv_hv_columns(self):
@@ -347,25 +359,94 @@ class TuiLayoutTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("MV", columns)
                 self.assertIn("HV", columns)
 
+    async def test_batch_period_selection_starts_analysis_automatically(self):
+        app = tui.SuperITui(start_session=False)
+        item = {"id": 1, "nama": "P1", "beban": []}
+        overview = batch.BatchOverview(
+            "beban-penyulang", "Beban Penyulang", "2026-07-18", (item,),
+            tuple(((item,) if period == 8 else () for period in range(24))),
+        )
+        app.pending_values.update({
+            "batch-data-type": "beban-penyulang",
+            "batch-overview": overview,
+        })
+        async with app.run_test(size=(100, 30)):
+            app.show_batch_hour_view("beban-penyulang")
+            app._prompt_batch_period()
+            with patch.object(app, "_analyze_batch_period") as analyze:
+                app._handle_editor_input("8")
+            self.assertEqual(app.pending_values["batch-period"], 8)
+            analyze.assert_called_once_with()
+
+    async def test_batch_period_zero_remains_a_valid_period(self):
+        app = tui.SuperITui(start_session=False)
+        item = {"id": 1, "nama": "P1", "beban": []}
+        overview = batch.BatchOverview(
+            "beban-penyulang", "Beban Penyulang", "2026-07-18", (item,),
+            tuple(((item,) if period == 0 else () for period in range(24))),
+        )
+        app.pending_values.update({
+            "batch-data-type": "beban-penyulang",
+            "batch-overview": overview,
+        })
+        async with app.run_test(size=(100, 30)):
+            app.show_batch_hour_view("beban-penyulang")
+            app._prompt_batch_period()
+            self.assertIn("Esc=Kembali", str(app.query_one("#prompt-label").render()))
+            with patch.object(app, "_analyze_batch_period") as analyze:
+                app._handle_editor_input("0")
+            self.assertEqual(app.pending_values["batch-period"], 0)
+            analyze.assert_called_once_with()
+
+    async def test_batch_selective_edit_only_queues_requested_items(self):
+        app = tui.SuperITui(start_session=False)
+        items = [
+            {"id": 1, "nama": "P1", "_batch_type": "beban-penyulang"},
+            {"id": 2, "nama": "P2", "_batch_type": "beban-penyulang"},
+            {"id": 3, "nama": "P3", "_batch_type": "beban-penyulang"},
+        ]
+        app.pending_values.update({
+            "batch-data-type": "beban-penyulang",
+            "batch-suggestions": [batch.BatchSuggestion(item, 100 + index) for index, item in enumerate(items)],
+        })
+        async with app.run_test(size=(100, 30)):
+            app.pending_editor = "batch-edit-selection"
+            app._handle_editor_input("2")
+            self.assertEqual(app.pending_values["batch-edit-queue"], [1])
+            self.assertEqual(app.pending_editor, "batch-edit-value")
+
+    async def test_batch_skip_sync_refreshes_same_data_type(self):
+        app = tui.SuperITui(start_session=False)
+        app.pending_values.update({
+            "batch-data-type": "tegangan-trafo",
+            "batch-period": 8,
+            "batch-result": batch.BatchResult(2, 2, 0),
+        })
+        async with app.run_test(size=(100, 30)):
+            app.pending_editor = "batch-sync-confirm"
+            with patch.object(app, "_return_to_batch_periods") as reload_periods:
+                app._handle_editor_input("n")
+            reload_periods.assert_called_once_with("Sync dilewati")
+
     async def test_batch_sync_handoff_keeps_type_date_and_period(self):
         app = tui.SuperITui(start_session=False)
         overview = batch.BatchOverview("beban-trafo", "Beban Trafo", "2026-07-18", (), tuple(() for _ in range(24)))
         app.pending_values.update({
+            "batch-data-type": "beban-trafo",
             "batch-overview": overview,
             "batch-period": 9,
             "batch-result": batch.BatchResult(3, 3, 0),
         })
-        called = []
-        app.show_sync_view = lambda *args, **kwargs: called.append(True)
         async with app.run_test(size=(100, 30)) as pilot:
-            app.current_view = "batch-hour"
-            app._handle_batch_hour_action("5")
+            with patch.object(app, "_start_sync") as start_sync:
+                app._start_batch_sync()
+                start_sync.assert_called_once_with(dry_run=True, offer_live=True)
             await pilot.pause()
             self.assertEqual(app.pending_values["sync-types"], ("trafo",))
             self.assertEqual(app.pending_values["sync-start"], 9)
             self.assertEqual(app.pending_values["sync-end"], 9)
             self.assertEqual(app.pending_values["sync-date"], "2026-07-18")
-            self.assertEqual(called, [True])
+            self.assertTrue(app.pending_values["batch-sync-guided"])
 
     async def test_view_data_command_uses_native_full_width_table_without_classic_header(self):
         app = tui.SuperITui(start_session=False)
@@ -611,6 +692,7 @@ class BatchServiceTests(unittest.TestCase):
 
         self.assertEqual([item["nama"] for item in overview.empty_by_period[8]], ["EMPTY"])
         self.assertEqual(overview.active_items, 2)
+        self.assertIn(8, overview.actionable_periods)
 
     def test_submit_rolls_back_record_when_photo_fails(self):
         item = {"id": 1, "nama": "TRAFO 1", "_batch_type": "tegangan-trafo"}

@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -31,9 +32,6 @@ MENU_COMMANDS = {
     "4": "input-feeder",
     "5": "input-transformer",
     "6": "input-voltage",
-    "7": "batch-item-feeder",
-    "8": "batch-item-transformer",
-    "9": "batch-item-voltage",
     "a": "batch-hour-feeder",
     "b": "batch-hour-transformer",
     "c": "batch-hour-voltage",
@@ -298,9 +296,9 @@ class SuperITui(App[None]):
     }
 
     #menu-grid.narrow {
-        grid-size: 1 5;
+        grid-size: 1 4;
         grid-columns: 1fr;
-        grid-rows: auto auto auto auto auto;
+        grid-rows: auto auto auto auto;
     }
 
     .menu-panel {
@@ -312,12 +310,20 @@ class SuperITui(App[None]):
         color: #eeeeee;
     }
 
+    #panel-batch-hour {
+        column-span: 2;
+    }
+
     #settings-section {
         column-span: 2;
-        height: auto;
+        height: 8;
     }
 
     #menu-grid.narrow #settings-section {
+        column-span: 1;
+    }
+
+    #menu-grid.narrow #panel-batch-hour {
         column-span: 1;
     }
 
@@ -328,7 +334,7 @@ class SuperITui(App[None]):
         grid-rows: auto;
         grid-gutter: 0 1;
         width: 100%;
-        height: auto;
+        height: 8;
     }
 
     #settings-grid.settings-medium {
@@ -336,6 +342,7 @@ class SuperITui(App[None]):
         grid-columns: 1fr 1fr;
         grid-rows: auto auto;
         grid-gutter: 1 2;
+        height: 17;
     }
 
     #settings-grid.settings-medium #settings-portal {
@@ -347,6 +354,7 @@ class SuperITui(App[None]):
         grid-columns: 1fr;
         grid-rows: auto auto auto;
         grid-gutter: 1 0;
+        height: 26;
     }
 
     #settings-grid.settings-narrow #settings-portal {
@@ -354,8 +362,7 @@ class SuperITui(App[None]):
     }
 
     .settings-panel {
-        height: auto;
-        min-height: 7;
+        height: 8;
         padding: 1 2;
         border: round $amber-soft;
         background: $surface;
@@ -458,6 +465,41 @@ class SuperITui(App[None]):
         padding: 0 2;
         border: round $amber-soft;
         background: #080808;
+    }
+
+    #batch-hour-context {
+        width: 100%;
+        height: 3;
+        padding: 0 2;
+        border: round $amber-soft;
+        background: $surface;
+        content-align: left middle;
+    }
+
+    #batch-hour-progress-panel {
+        display: none;
+        width: 100%;
+        height: 5;
+        padding: 0 2;
+        border: round $amber-soft;
+        background: #080808;
+    }
+
+    #batch-hour-progress-panel.active {
+        display: block;
+    }
+
+    #batch-hour-progress-label {
+        height: 1;
+        color: $amber;
+        text-style: bold;
+    }
+
+    #batch-hour-progress {
+        width: 100%;
+        height: 1;
+        color: $amber;
+        background: #24200f;
     }
 
     #sync-progress-panel.active {
@@ -596,7 +638,6 @@ class SuperITui(App[None]):
                 with Container(id="menu-grid"):
                     yield MenuPanel("LIHAT DATA", "", id="panel-view")
                     yield MenuPanel("INPUT MANUAL", "", id="panel-input")
-                    yield MenuPanel("BATCH PER ITEM", "", id="panel-batch-item")
                     yield MenuPanel("BATCH PER JAM · + SYNC PORTAL", "", id="panel-batch-hour")
                     with Vertical(id="settings-section"):
                         with Container(id="settings-grid"):
@@ -663,12 +704,10 @@ class SuperITui(App[None]):
                         yield StatusCard("AKSI", id="setup-actions-card", classes="action-card")
                 with Vertical(id="batch-hour-view", classes="native-view"):
                     yield Static(id="batch-hour-heading", classes="native-heading")
-                    with Container(id="batch-hour-grid", classes="native-grid"):
-                        yield StatusCard("STATUS DATA", id="batch-hour-status-card")
-                        yield StatusCard("PERIODE TERPILIH", id="batch-hour-period-card")
-                        yield StatusCard("SMART SUGGEST", id="batch-hour-suggest-card")
-                        yield StatusCard("RINGKASAN PROSES", id="batch-hour-summary-card")
-                        yield StatusCard("AKSI", id="batch-hour-actions-card", classes="action-card")
+                    yield Static(id="batch-hour-context")
+                    with Vertical(id="batch-hour-progress-panel"):
+                        yield Static("Menunggu proses batch", id="batch-hour-progress-label")
+                        yield ProgressBar(total=100, show_eta=False, id="batch-hour-progress")
                     yield DataTable(id="batch-hour-table", classes="native-table", zebra_stripes=True)
                     yield RichLog(id="batch-hour-log", classes="native-log", markup=True, wrap=True, highlight=False)
                 with Vertical(id="data-view", classes="native-view"):
@@ -718,11 +757,13 @@ class SuperITui(App[None]):
         settings = self.query_one("#settings-grid")
         settings.set_class(event.size.width < 94, "settings-narrow")
         settings.set_class(94 <= event.size.width < 112, "settings-medium")
+        self.query_one("#settings-section").styles.height = (
+            26 if event.size.width < 94 else 17 if event.size.width < 112 else 8
+        )
         self.query_one("#auto-grid").set_class(event.size.width < 94, "narrow")
         self.query_one("#photo-grid").set_class(event.size.width < 94, "narrow")
         self.query_one("#sync-grid").set_class(event.size.width < 94, "narrow")
         self.query_one("#setup-grid").set_class(event.size.width < 94, "narrow")
-        self.query_one("#batch-hour-grid").set_class(event.size.width < 94, "narrow")
         if self.current_view == "data" and "data-items" in self.pending_values:
             self._render_data_table(
                 self.pending_values["data-type"], self.pending_values["data-items"]
@@ -780,12 +821,6 @@ class SuperITui(App[None]):
             "[bold #ffc107][5][/] Beban Trafo\n"
             "[bold #ffc107][6][/] Tegangan Trafo\n\n"
             "[dim]Input satu item dan satu periode.[/]"
-        )
-        self.query_one("#panel-batch-item", Static).update(
-            "[bold #ffc107][7][/] Beban Penyulang\n"
-            "[bold #ffc107][8][/] Beban Trafo\n"
-            "[bold #ffc107][9][/] Tegangan Trafo\n\n"
-            "[dim]Isi semua periode kosong untuk satu item.[/]"
         )
         self.query_one("#panel-batch-hour", Static).update(
             "[bold #ffc107][A][/] Beban Penyulang\n"
@@ -1048,67 +1083,44 @@ class SuperITui(App[None]):
         period = self.pending_values.get("batch-period")
         suggestions = self.pending_values.get("batch-suggestions", [])
         result = self.pending_values.get("batch-result")
+        self.query_one("#batch-hour-progress-panel").remove_class("active")
         if overview and overview.data_type == data_type:
-            self._render_batch_overview(overview)
+            if result:
+                self._render_batch_result(overview, period, result)
+            elif suggestions and period is not None:
+                self._render_batch_suggestions(overview, period, suggestions)
+            else:
+                self._render_batch_overview(overview)
         else:
-            self.query_one("#batch-hour-status-card", Static).update(
-                f"Jenis data         [bold yellow]{labels[data_type].title()}[/]\n"
-                f"Tanggal            [bold white]{escape(self.date_str)}[/]\n"
-                "Status             [bold yellow]MEMUAT DATA[/]"
-            )
-            self.query_one("#batch-hour-period-card", Static).update("[dim]Pilih periode setelah data dimuat.[/]")
-            self.query_one("#batch-hour-suggest-card", Static).update("[dim]Belum dianalisis.[/]")
-            self.query_one("#batch-hour-summary-card", Static).update("[dim]Menunggu data SUPER-I.[/]")
-        if period is not None and overview and overview.data_type == data_type and not result:
-            self._render_batch_suggestions(overview, period, suggestions)
-        elif result and overview and overview.data_type == data_type:
-            self.query_one("#batch-hour-summary-card", Static).update(
-                "Status             [bold green]SELESAI[/]\n"
-                f"Berhasil           [bold green]{result.success}[/]\n"
-                f"Gagal              [bold {'red' if result.failed else 'green'}]{result.failed}[/]\n"
-                f"Total              [bold white]{result.total}[/]"
+            self.query_one("#batch-hour-context", Static).update(
+                f"[bold yellow]{labels[data_type].title()}[/] · {escape(self.date_str)} · [dim]Memuat periode yang tersedia...[/]"
             )
             self.query_one("#batch-hour-table").display = False
-            self.query_one("#batch-hour-log").display = True
-        self.query_one("#batch-hour-actions-card", Static).update(
-            f"[bold #ffc107][1][/] {'Pilih Periode':<25}[bold #ffc107][2][/] Analisis Smart Suggest\n"
-            f"[bold #ffc107][3][/] {'Tinjau / Edit Nilai':<25}[bold green][4][/] Jalankan Batch\n"
-            f"[bold #ffc107][5][/] {'Sync Hasil ke Portal':<25}[bold #ffc107][6][/] Muat Ulang Data\n"
-            "[bold red][0][/] Kembali"
-        )
-        self._set_native_prompt("Pilih aksi Batch per Jam", "1-6 atau 0")
+            self.query_one("#batch-hour-log").display = False
         if not overview or overview.data_type != data_type:
             self._load_batch_overview(data_type)
 
     def _render_batch_overview(self, overview):
         full = 24 - overview.incomplete_periods
-        self.query_one("#batch-hour-status-card", Static).update(
-            f"Jenis data         [bold yellow]{escape(overview.label)}[/]\n"
-            f"Tanggal            [bold white]{escape(overview.date)}[/]\n"
-            f"Item aktif         [bold white]{overview.active_items}[/]\n"
-            f"Periode            [bold green]{full} penuh[/] · [bold yellow]{overview.incomplete_periods} belum lengkap[/]"
+        self.query_one("#batch-hour-context", Static).update(
+            f"[bold yellow]{escape(overview.label)}[/] · {escape(overview.date)} · "
+            f"{overview.active_items} item aktif · [green]{full} periode penuh[/] · "
+            f"[yellow]{overview.incomplete_periods} bisa di-batch[/]"
         )
         table = self.query_one("#batch-hour-table", DataTable)
         table.clear(columns=True)
-        table.add_columns("Periode", "Item Kosong", "Status")
-        for period, items in enumerate(overview.empty_by_period):
-            table.add_row(f"P{period:02d}:00", str(len(items)), "SIAP BATCH" if items else "PENUH")
+        table.add_columns("Periode", "Item Kosong", "Aksi")
+        for period in overview.actionable_periods:
+            table.add_row(f"P{period:02d}:00", str(len(overview.empty_by_period[period])), "SIAP BATCH")
         table.display = True
         self.query_one("#batch-hour-log").display = False
 
     def _render_batch_suggestions(self, overview, period: int, suggestions):
         missing = sum(not item.valid for item in suggestions)
-        self.query_one("#batch-hour-period-card", Static).update(
-            f"Periode            [bold yellow]P{period:02d}:00[/]\n"
-            f"Item kosong        [bold white]{len(overview.empty_by_period[period])}[/]\n"
-            f"Tanggal            [bold white]{escape(overview.date)}[/]\n"
-            "Status             [bold green]DIPILIH[/]"
-        )
-        self.query_one("#batch-hour-suggest-card", Static).update(
-            f"History            [bold yellow]{__import__('superi_app').get_history_days()} hari[/]\n"
-            f"Suggest valid      [bold green]{len(suggestions) - missing}[/]\n"
-            f"Perlu edit         [bold {'red' if missing else 'green'}]{missing}[/]\n"
-            "[dim]Enter kosong mempertahankan nilai suggest.[/]"
+        self.query_one("#batch-hour-context", Static).update(
+            f"[bold yellow]SMART SUGGEST · P{period:02d}:00[/] · {escape(overview.date)} · "
+            f"[green]{len(suggestions) - missing} siap[/] · "
+            f"[{'red' if missing else 'green'}]{missing} perlu edit[/]"
         )
         table = self.query_one("#batch-hour-table", DataTable)
         table.clear(columns=True)
@@ -1122,6 +1134,23 @@ class SuperITui(App[None]):
                 table.add_row(str(index), item.item["nama"], f"{item.value} A" if item.value is not None else "—", item.info, "SIAP" if item.valid else "PERLU EDIT")
         table.display = True
         self.query_one("#batch-hour-log").display = False
+
+    def _render_batch_result(self, overview, period: int, result):
+        elapsed = self.pending_values.get("batch-elapsed", 0)
+        minutes, seconds = divmod(int(elapsed), 60)
+        self.query_one("#batch-hour-context", Static).update(
+            f"[bold green]BATCH SELESAI · P{period:02d}:00[/] · Target {result.total} · "
+            f"[green]{result.success} berhasil[/] · "
+            f"[{'red' if result.failed else 'green'}]{result.failed} gagal[/] · {minutes}m {seconds}s"
+        )
+        log = self.query_one("#batch-hour-log", RichLog)
+        if result.failures:
+            log.write("")
+            log.write("[bold red]ITEM GAGAL[/]")
+            for name, reason in result.failures:
+                log.write(f"  [red]✗[/] {escape(name)} · {escape(reason)}")
+        self.query_one("#batch-hour-table").display = False
+        log.display = True
 
     def show_data_view(self, data_type: str, *, push: bool = True):
         labels = {
@@ -1499,9 +1528,9 @@ class SuperITui(App[None]):
             "batch-hour-voltage": "tegangan-trafo",
         }
         if command in batch_types:
-            self.pending_values.pop("batch-overview", None)
-            self.pending_values.pop("batch-period", None)
-            self.pending_values.pop("batch-suggestions", None)
+            for key in tuple(self.pending_values):
+                if key.startswith("batch-"):
+                    self.pending_values.pop(key, None)
             self.show_batch_hour_view(batch_types[command])
             return
         data_types = {
@@ -1550,9 +1579,6 @@ class SuperITui(App[None]):
                 "input-feeder": lambda: core.input_single(self.token, "beban-penyulang", self.gi_id, self.date_str, self.user),
                 "input-transformer": lambda: core.input_single(self.token, "beban-trafo", self.gi_id, self.date_str, self.user),
                 "input-voltage": lambda: core.input_single(self.token, "tegangan-trafo", self.gi_id, self.date_str, self.user),
-                "batch-item-feeder": lambda: core.batch_fill(self.token, "beban-penyulang", self.gi_id, self.date_str, self.user),
-                "batch-item-transformer": lambda: core.batch_fill(self.token, "beban-trafo", self.gi_id, self.date_str, self.user),
-                "batch-item-voltage": lambda: core.batch_fill(self.token, "tegangan-trafo", self.gi_id, self.date_str, self.user),
                 "batch-hour-feeder": lambda: core.batch_fill_periode(self.token, "beban-penyulang", self.gi_id, self.date_str, self.user),
                 "batch-hour-transformer": lambda: core.batch_fill_periode(self.token, "beban-trafo", self.gi_id, self.date_str, self.user),
                 "batch-hour-voltage": lambda: core.batch_fill_periode(self.token, "tegangan-trafo", self.gi_id, self.date_str, self.user),
@@ -1675,55 +1701,10 @@ class SuperITui(App[None]):
             self.set_prompt_error("Pilihan Setup Kredensial valid: 1-5 atau 0")
 
     def _handle_batch_hour_action(self, value: str):
-        overview = self.pending_values.get("batch-overview")
-        period = self.pending_values.get("batch-period")
-        suggestions = self.pending_values.get("batch-suggestions", [])
         if value == "0":
             self.action_back()
-        elif value == "1":
-            if not overview:
-                self.set_prompt_error("Data masih dimuat")
-                return
-            self.pending_editor = "batch-period"
-            self._set_editor_prompt("Pilih periode 0-23", str(period if period is not None else 0))
-        elif value == "2":
-            if period is None:
-                self.set_prompt_error("Pilih periode terlebih dahulu")
-                return
-            self._analyze_batch_period()
-        elif value == "3":
-            if not suggestions:
-                self.set_prompt_error("Jalankan analisis Smart Suggest terlebih dahulu")
-                return
-            self.pending_values["batch-edit-index"] = 0
-            self._prompt_batch_edit()
-        elif value == "4":
-            if not suggestions:
-                self.set_prompt_error("Jalankan analisis Smart Suggest terlebih dahulu")
-                return
-            if any(not suggestion.valid for suggestion in suggestions):
-                self.set_prompt_error("Lengkapi semua nilai yang berstatus PERLU EDIT")
-                return
-            self.pending_editor = "batch-submit-confirm"
-            self._set_editor_prompt(f"Input {len(suggestions)} item di P{period:02d}? (y/N)", "n")
-        elif value == "5":
-            result = self.pending_values.get("batch-result")
-            if not result or not result.success:
-                self.set_prompt_error("Belum ada hasil batch berhasil untuk di-sync")
-                return
-            type_map = {"beban-penyulang": "penyulang", "beban-trafo": "trafo", "tegangan-trafo": "tegangan"}
-            self.pending_values["sync-types"] = (type_map[overview.data_type],)
-            self.pending_values["sync-start"] = period
-            self.pending_values["sync-end"] = period
-            self.pending_values["sync-date"] = overview.date
-            self.show_sync_view()
-        elif value == "6":
-            self.pending_values.pop("batch-overview", None)
-            self.pending_values.pop("batch-suggestions", None)
-            self.pending_values.pop("batch-result", None)
-            self.show_batch_hour_view(self.pending_values["batch-data-type"], push=False)
         else:
-            self.set_prompt_error("Pilihan Batch per Jam valid: 1-6 atau 0")
+            self.set_prompt_error("Ikuti prompt yang tampil, atau gunakan 0 untuk kembali")
 
     def _set_editor_prompt(self, label: str, default: str, *, password: bool = False):
         self._busy = False
@@ -1809,6 +1790,8 @@ class SuperITui(App[None]):
                 self.pending_editor = None
                 if value.lower() in ("y", "yes"):
                     self._start_sync(dry_run=False)
+                elif self.pending_values.get("batch-sync-guided"):
+                    self._return_to_batch_periods("Sync LIVE dibatalkan")
                 else:
                     self.show_sync_view(push=False)
             elif editor == "setup-nip":
@@ -1855,7 +1838,43 @@ class SuperITui(App[None]):
                 self.pending_values.pop("batch-suggestions", None)
                 self.pending_values.pop("batch-result", None)
                 self.pending_editor = None
-                self.show_batch_hour_view(overview.data_type, push=False)
+                self._analyze_batch_period()
+            elif editor == "batch-edit-confirm":
+                if value.lower() in ("y", "yes"):
+                    self.pending_editor = "batch-edit-selection"
+                    invalid = [str(index) for index, suggestion in enumerate(self.pending_values["batch-suggestions"], 1) if not suggestion.valid]
+                    default = ",".join(invalid)
+                    self._set_editor_prompt("Nomor item yang diubah (contoh 2,5 atau all)", default)
+                else:
+                    invalid = [index for index, suggestion in enumerate(self.pending_values["batch-suggestions"]) if not suggestion.valid]
+                    if invalid:
+                        self.set_prompt_error("Item tanpa suggest wajib dilengkapi")
+                        self.pending_values["batch-edit-queue"] = invalid
+                        self.pending_values["batch-edit-position"] = 0
+                        self._prompt_batch_edit()
+                    else:
+                        self._request_batch_submit()
+            elif editor == "batch-edit-selection":
+                suggestions = self.pending_values["batch-suggestions"]
+                raw = value.strip().lower()
+                if raw == "all":
+                    selected = list(range(len(suggestions)))
+                else:
+                    numbers = [part.strip() for part in raw.split(",") if part.strip()]
+                    if not numbers:
+                        raise ValueError("Pilih minimal satu nomor item")
+                    selected = []
+                    for part in numbers:
+                        number = int(part)
+                        if not 1 <= number <= len(suggestions):
+                            raise ValueError(f"Nomor item harus 1-{len(suggestions)}")
+                        if number - 1 not in selected:
+                            selected.append(number - 1)
+                invalid = [index for index, suggestion in enumerate(suggestions) if not suggestion.valid]
+                selected.extend(index for index in invalid if index not in selected)
+                self.pending_values["batch-edit-queue"] = selected
+                self.pending_values["batch-edit-position"] = 0
+                self._prompt_batch_edit()
             elif editor == "batch-edit-value":
                 self._apply_batch_edit(value, voltage=False)
             elif editor == "batch-edit-mv":
@@ -1867,7 +1886,19 @@ class SuperITui(App[None]):
                 if value.lower() in ("y", "yes"):
                     self._submit_batch_period()
                 else:
-                    self.show_batch_hour_view(self.pending_values["batch-data-type"], push=False)
+                    self._prompt_batch_period()
+            elif editor == "batch-sync-confirm":
+                self.pending_editor = None
+                if value.lower() in ("y", "yes"):
+                    self._start_batch_sync()
+                else:
+                    self._return_to_batch_periods("Sync dilewati")
+            elif editor in ("batch-reload-confirm", "batch-sync-failed"):
+                self.pending_editor = None
+                self._return_to_batch_periods("Data periode dimuat ulang")
+            elif editor == "batch-sync-summary":
+                self.pending_editor = None
+                self._return_to_batch_periods("Sync Portal selesai")
             elif editor == "scheduler-install-confirm":
                 self.pending_editor = None
                 if value.lower() in ("y", "yes"):
@@ -1905,6 +1936,24 @@ class SuperITui(App[None]):
 
         self.run_worker(work, thread=True, name="batch-load", exclusive=True, exit_on_error=False)
 
+    def _prompt_batch_period(self):
+        overview = self.pending_values.get("batch-overview")
+        if not overview or not overview.items:
+            self.pending_editor = None
+            self._set_native_prompt("Tidak ada item. Tekan 0 atau Esc untuk kembali", "0")
+            return
+        if not overview.actionable_periods:
+            self.pending_editor = None
+            self.query_one("#batch-hour-context", Static).update(
+                f"[bold green]{escape(overview.label)} · Semua 24 periode sudah lengkap[/] · {escape(overview.date)}"
+            )
+            self._set_native_prompt("Semua periode penuh. Tekan 0 atau Esc untuk kembali", "0")
+            return
+        self._render_batch_overview(overview)
+        choices = "/".join(f"{period:02d}" for period in overview.actionable_periods)
+        self.pending_editor = "batch-period"
+        self._set_editor_prompt(f"Pilih periode [{choices}] · Esc=Kembali", f"{overview.actionable_periods[0]:02d}")
+
     def _analyze_batch_period(self):
         from superi_batch import analyze_period
 
@@ -1912,10 +1961,9 @@ class SuperITui(App[None]):
         period = self.pending_values["batch-period"]
         self.current_view = "batch-hour-analyzing"
         self.set_busy_prompt(f"Menganalisis histori untuk P{period:02d}:00...")
-        self.query_one("#batch-hour-summary-card", Static).update(
-            "Status             [bold yellow]MENGANALISIS[/]\n"
-            f"Periode            [bold white]P{period:02d}:00[/]\n"
-            "[dim]Mengambil pola histori semua item.[/]"
+        self.query_one("#batch-hour-context", Static).update(
+            f"[bold yellow]Menganalisis Smart Suggest · P{period:02d}:00[/] · "
+            f"{len(overview.empty_by_period[period])} item"
         )
 
         def work():
@@ -1927,24 +1975,33 @@ class SuperITui(App[None]):
 
     def _prompt_batch_edit(self):
         suggestions = self.pending_values["batch-suggestions"]
-        index = self.pending_values["batch-edit-index"]
-        if index >= len(suggestions):
+        queue = self.pending_values.get("batch-edit-queue", [])
+        position = self.pending_values.get("batch-edit-position", 0)
+        if position >= len(queue):
+            if any(not suggestion.valid for suggestion in suggestions):
+                self.set_prompt_error("Masih ada nilai yang wajib dilengkapi")
+                self.pending_values["batch-edit-queue"] = [index for index, suggestion in enumerate(suggestions) if not suggestion.valid]
+                self.pending_values["batch-edit-position"] = 0
+                self._prompt_batch_edit()
+                return
             self.pending_editor = None
             self.show_batch_hour_view(self.pending_values["batch-data-type"], push=False)
             self.notify("Edit nilai selesai", severity="information")
+            self._request_batch_submit()
             return
+        index = queue[position]
         suggestion = suggestions[index]
         name = suggestion.item["nama"]
         if self.pending_values["batch-data-type"] == "tegangan-trafo":
             self.pending_editor = "batch-edit-mv"
             self._set_editor_prompt(
-                f"Item {index + 1}/{len(suggestions)} · {name} · MV (kV)",
+                f"Edit {position + 1}/{len(queue)} · Item {index + 1} · {name} · MV (kV)",
                 "" if suggestion.value is None else str(suggestion.value),
             )
         else:
             self.pending_editor = "batch-edit-value"
             self._set_editor_prompt(
-                f"Item {index + 1}/{len(suggestions)} · {name} · Ampere",
+                f"Edit {position + 1}/{len(queue)} · Item {index + 1} · {name} · Ampere",
                 "" if suggestion.value is None else str(suggestion.value),
             )
 
@@ -1960,7 +2017,9 @@ class SuperITui(App[None]):
 
     def _apply_batch_edit(self, value: str, *, voltage: bool):
         suggestions = self.pending_values["batch-suggestions"]
-        index = self.pending_values["batch-edit-index"]
+        queue = self.pending_values["batch-edit-queue"]
+        position = self.pending_values["batch-edit-position"]
+        index = queue[position]
         suggestion = suggestions[index]
         suggestion.value = self._parse_batch_number(value, suggestion.value)
         if voltage:
@@ -1970,16 +2029,27 @@ class SuperITui(App[None]):
                 "" if suggestion.hv is None else str(suggestion.hv),
             )
             return
-        self.pending_values["batch-edit-index"] = index + 1
+        self.pending_values["batch-edit-position"] = position + 1
         self._prompt_batch_edit()
 
     def _apply_batch_hv(self, value: str):
         suggestions = self.pending_values["batch-suggestions"]
-        index = self.pending_values["batch-edit-index"]
+        queue = self.pending_values["batch-edit-queue"]
+        position = self.pending_values["batch-edit-position"]
+        index = queue[position]
         suggestion = suggestions[index]
         suggestion.hv = self._parse_batch_number(value, suggestion.hv)
-        self.pending_values["batch-edit-index"] = index + 1
+        self.pending_values["batch-edit-position"] = position + 1
         self._prompt_batch_edit()
+
+    def _request_batch_submit(self):
+        suggestions = self.pending_values.get("batch-suggestions", [])
+        period = self.pending_values.get("batch-period")
+        if not suggestions or any(not suggestion.valid for suggestion in suggestions):
+            self.set_prompt_error("Lengkapi semua nilai yang berstatus PERLU EDIT")
+            return
+        self.pending_editor = "batch-submit-confirm"
+        self._set_editor_prompt(f"Jalankan batch {len(suggestions)} item di P{period:02d}:00? (y/N)", "n")
 
     def _submit_batch_period(self):
         from superi_batch import submit_period
@@ -1992,25 +2062,60 @@ class SuperITui(App[None]):
         log.display = True
         self.query_one("#batch-hour-table").display = False
         self.current_view = "batch-hour-submitting"
+        self.pending_values["batch-started-at"] = time.monotonic()
         self.set_busy_prompt(f"Menginput {len(suggestions)} item pada P{period:02d}:00...")
+        progress_panel = self.query_one("#batch-hour-progress-panel")
+        progress_panel.add_class("active")
+        self.query_one("#batch-hour-progress", ProgressBar).update(total=len(suggestions), progress=0)
+        self.query_one("#batch-hour-progress-label", Static).update(f"BATCH P{period:02d}:00 · Menyiapkan {len(suggestions)} item...")
 
         def progress(done, total, name, ok, detail):
             style = "green" if ok else "red"
             self.call_from_thread(log.write, f"[{style}][{done:02d}/{total:02d}] {escape(name)} · {'OK' if ok else 'GAGAL'} · {escape(detail)}[/]")
+            self.call_from_thread(self.query_one("#batch-hour-progress", ProgressBar).update, total=total, progress=done)
             self.call_from_thread(
-                self.query_one("#batch-hour-summary-card", Static).update,
-                "Status             [bold yellow]SEDANG BERJALAN[/]\n"
-                f"Progress           [bold white]{done}/{total}[/]\n"
-                f"Item terakhir      [bold white]{escape(name)}[/]\n"
-                f"Hasil              [bold {style}]{'BERHASIL' if ok else 'GAGAL'}[/]",
+                self.query_one("#batch-hour-progress-label", Static).update,
+                f"BATCH P{period:02d}:00 · {done}/{total} · {escape(name)} · {'BERHASIL' if ok else 'GAGAL'}",
             )
             self.pending_values["batch-progress"] = (done, total, name)
 
         def work():
             result = submit_period(overview, period, suggestions, self.token, progress=progress)
             self.pending_values["batch-result"] = result
+            self.pending_values["batch-elapsed"] = time.monotonic() - self.pending_values["batch-started-at"]
 
         self.run_worker(work, thread=True, name="batch-submit", exclusive=True, exit_on_error=False)
+
+    def _start_batch_sync(self):
+        overview = self.pending_values["batch-overview"]
+        period = self.pending_values["batch-period"]
+        type_map = {
+            "beban-penyulang": "penyulang",
+            "beban-trafo": "trafo",
+            "tegangan-trafo": "tegangan",
+        }
+        self.pending_values["sync-types"] = (type_map[overview.data_type],)
+        self.pending_values["sync-start"] = period
+        self.pending_values["sync-end"] = period
+        self.pending_values["sync-date"] = overview.date
+        self.pending_values["batch-sync-guided"] = True
+        self.show_sync_view()
+        self._start_sync(dry_run=True, offer_live=True)
+
+    def _return_to_batch_periods(self, message: str = ""):
+        data_type = self.pending_values.get("batch-data-type", "beban-penyulang")
+        self.pending_editor = None
+        self.pending_values.pop("batch-sync-guided", None)
+        for key in (
+            "batch-overview", "batch-period", "batch-suggestions", "batch-result",
+            "batch-edit-queue", "batch-edit-position", "batch-progress",
+            "batch-started-at", "batch-elapsed",
+        ):
+            self.pending_values.pop(key, None)
+        self.view_stack = [view for view in self.view_stack if view != "batch-hour"]
+        self.show_batch_hour_view(data_type, push=False)
+        if message:
+            self.notify(message, severity="information")
 
     def _request_setup_confirmation(self):
         draft = self.pending_values.get("setup-draft", {})
@@ -2492,44 +2597,33 @@ class SuperITui(App[None]):
             self.current_view = "batch-hour"
             if event.state == WorkerState.ERROR:
                 message = escape(str(event.worker.error))
-                self.query_one("#batch-hour-summary-card", Static).update(
-                    "Status             [bold red]GAGAL[/]\n"
-                    f"[dim]{message}[/]"
+                self.query_one("#batch-hour-context", Static).update(
+                    f"[bold red]PROSES GAGAL[/] · [dim]{message}[/]"
                 )
-                self._set_native_prompt("Pilih aksi Batch per Jam", "1-6 atau 0")
+                self._set_native_prompt("Tekan 0 atau Esc untuk kembali", "0")
                 return
-            self.show_batch_hour_view(data_type, push=False)
             if event.worker.name == "batch-load":
+                self.show_batch_hour_view(data_type, push=False)
                 overview = self.pending_values.get("batch-overview")
-                if overview and not overview.items:
-                    self.query_one("#batch-hour-summary-card", Static).update(
-                        "Status             [bold yellow]DATA KOSONG[/]\n"
-                        "[dim]Tidak ada item untuk tanggal ini.[/]"
-                    )
-                else:
-                    self.query_one("#batch-hour-summary-card", Static).update(
-                        "Status             [bold green]DATA SIAP[/]\n"
-                        "[dim]Pilih periode untuk memulai batch.[/]"
-                    )
+                self._prompt_batch_period()
             elif event.worker.name == "batch-analyze":
+                self.show_batch_hour_view(data_type, push=False)
                 suggestions = self.pending_values.get("batch-suggestions", [])
-                valid = sum(item.valid for item in suggestions)
-                self.query_one("#batch-hour-summary-card", Static).update(
-                    "Status             [bold green]ANALISIS SELESAI[/]\n"
-                    f"Siap               [bold green]{valid}[/]\n"
-                    f"Perlu edit         [bold {'red' if valid < len(suggestions) else 'green'}]{len(suggestions) - valid}[/]"
-                )
+                self.pending_editor = "batch-edit-confirm"
+                self._set_editor_prompt(f"Ubah nilai Smart Suggest ({len(suggestions)} item)? (y/N)", "n")
             else:
                 result = self.pending_values.get("batch-result")
                 if result:
-                    self.query_one("#batch-hour-summary-card", Static).update(
-                        "Status             [bold green]SELESAI[/]\n"
-                        f"Berhasil           [bold green]{result.success}[/]\n"
-                        f"Gagal              [bold {'red' if result.failed else 'green'}]{result.failed}[/]\n"
-                        f"Total              [bold white]{result.total}[/]"
-                    )
-                    self.query_one("#batch-hour-table").display = False
-                    self.query_one("#batch-hour-log").display = True
+                    self.show_batch_hour_view(data_type, push=False)
+                    if result.success:
+                        self.pending_editor = "batch-sync-confirm"
+                        period = self.pending_values["batch-period"]
+                        self._set_editor_prompt(
+                            f"Sync {result.success} hasil P{period:02d}:00 ke Portal APD? (y/N)", "n"
+                        )
+                    else:
+                        self._set_native_prompt("Semua input gagal. Tekan Enter untuk memuat ulang", "")
+                        self.pending_editor = "batch-reload-confirm"
             return
         if event.worker.name == "credential-test" and event.state in (WorkerState.SUCCESS, WorkerState.ERROR, WorkerState.CANCELLED):
             label = getattr(self, "_credential_test_target", "Koneksi")
@@ -2547,6 +2641,7 @@ class SuperITui(App[None]):
             return
         if event.worker.name == "sync-operation" and event.state in (WorkerState.SUCCESS, WorkerState.ERROR, WorkerState.CANCELLED):
             offer_live = getattr(self, "_sync_offer_live", False)
+            guided = bool(self.pending_values.get("batch-sync-guided"))
             self._sync_offer_live = False
             self.current_view = "sync"
             if event.state == WorkerState.ERROR:
@@ -2564,8 +2659,18 @@ class SuperITui(App[None]):
                 progress_panel.add_class("failed")
             self.show_sync_view(push=False)
             if event.state == WorkerState.SUCCESS and offer_live and getattr(self, "_sync_last_ok", False):
-                self.pending_editor = "sync-live-confirm"
-                self._set_editor_prompt("Preview selesai. Lanjut LIVE Sync? (y/N)", "n")
+                if guided:
+                    self._start_sync(dry_run=False)
+                else:
+                    self.pending_editor = "sync-live-confirm"
+                    self._set_editor_prompt("Preview selesai. Lanjut LIVE Sync? (y/N)", "n")
+            elif guided and not offer_live:
+                self.pending_editor = "batch-sync-summary"
+                status = "selesai" if getattr(self, "_sync_last_ok", False) else "sebagian gagal"
+                self._set_editor_prompt(f"Sync Portal {status}. Tekan Enter untuk kembali ke periode", "")
+            elif guided:
+                self.pending_editor = "batch-sync-failed"
+                self._set_editor_prompt("Preview sync gagal. Muat ulang periode? (Y/n)", "y")
             else:
                 self._set_native_prompt("Pilih aksi Sync Portal", "1-5 atau 0")
             return

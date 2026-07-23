@@ -30,6 +30,24 @@ class _Response:
 
 
 class MultipartContractTests(unittest.TestCase):
+    def test_web_batch_api_rejects_removed_per_item_mode(self):
+        web.app.config.update(TESTING=True, SECRET_KEY="test")
+        client = web.app.test_client()
+        with client.session_transaction() as session:
+            session["token"] = "token"
+            session["user"] = {"namaLengkap": "Test"}
+        response = client.post(
+            "/api/data/batch-input",
+            json={
+                "type": "beban-penyulang",
+                "mode": "per-item",
+                "item_id": 1,
+                "periods": [{"periode": 8, "value": 100}],
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("per-periode", response.get_json()["message"])
+
     def test_tegangan_uses_two_ordered_files_and_clean_json(self):
         payload = {
             "trafoId": 123,

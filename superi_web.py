@@ -226,197 +226,6 @@ def _round_mv(name: str, mv_avg: float):
     return rounded
 
 
-def learn_pattern(token, gi_id, data_type, item_id, days_back=None):
-    """
-    Belajar pola beban/tegangan per periode dari data historis (N hari, default dari config).
-    PARITY dengan CLI superior_app.py smart_suggest_from_cache / smart_suggest_tegangan_from_cache.
-
-    Perbedaan dari versi lama:
-    - N hari (default config history_days, fallback 7; boleh 3/7/14)
-    - Weekday/weekend aware (50% pattern + 50% base)
-    - Round kelipatan 5 untuk beban, aturan trafo untuk tegangan MV
-    - Clamp ke range histori pattern
-    - Fallback: kalau periode target kosong, pakai rata-rata semua periode
-
-    Return dict: {periode: {avg, min, max, samples, ...}}
-    """
-    if days_back is None:
-        days_back = _cli.get_history_days()
-    from collections import defaultdict
-    from datetime import datetime, timedelta
-    from concurrent.futures import ThreadPoolExecutor
-
-    paths = {
-        "beban-penyulang": "/gama/opgi-20kv/operator-gi/beban-penyulang",
-        "beban-trafo": "/gama/opgi-20kv/operator-gi/beban-trafo",
-        "tegangan-trafo": "/gama/opgi-20kv/operator-gi/tegangan-trafo",
-    }
-    path = paths[data_type]
-
-    today = datetime.now()
-    is_target_weekend = today.weekday() >= 5
-
-    # Build cache per-periode: {periode: {all: [], weekday: [], weekend: []}}
-    pattern = defaultdict(lambda: {
-        "all": [], "weekday": [], "weekend": [],
-        "mv_all": [], "mv_weekday": [], "mv_weekend": [],
-        "hv_all": [], "hv_weekday": [], "hv_weekend": [],
-    })
-    item_name = ""
-
-    def fetch_day(offset):
-        d = today - timedelta(days=offset)
-        return d.weekday() >= 5, api_get(token, path, {"garduIndukId": gi_id, "date": d.strftime("%Y-%m-%d")})
-
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        results = list(executor.map(fetch_day, range(1, days_back + 1)))
-
-    for is_weekend, result in results:
-        items = result.get("data", {}).get("items", [])
-        for it in items:
-            if it["id"] != item_id:
-                continue
-            if not item_name:
-                item_name = it.get("nama", "")
-            if data_type == "tegangan-trafo":
-                for e in it.get("tegangan", []):
-                    p = e["periode"]
-                    pattern[p]["mv_all"].append(e["mv"])
-                    pattern[p]["hv_all"].append(e["hv"])
-                    if is_weekend:
-                        pattern[p]["mv_weekend"].append(e["mv"])
-                        pattern[p]["hv_weekend"].append(e["hv"])
-                    else:
-                        pattern[p]["mv_weekday"].append(e["mv"])
-                        pattern[p]["hv_weekday"].append(e["hv"])
-            else:
-                if it.get("statusCB") == "OFF":
-                    continue
-                for e in it.get("beban", []):
-                    p = e["periode"]
-                    val = e["beban"]
-                    pattern[p]["all"].append(val)
-                    if is_weekend:
-                        pattern[p]["weekend"].append(val)
-                    else:
-                        pattern[p]["weekday"].append(val)
-
-    # Hitung smart suggest per periode
-    result = {}
-    for periode, data in pattern.items():
-        if data_type == "tegangan-trafo":
-            all_mv = data["mv_all"]
-            all_hv = data["hv_all"]
-            if not all_mv:
-                continue
-            if is_target_weekend:
-                pat_mv = data["mv_weekend"] if data["mv_weekend"] else all_mv
-                pat_hv = data["hv_weekend"] if data["hv_weekend"] else all_hv
-            else:
-                pat_mv = data["mv_weekday"] if data["mv_weekday"] else all_mv
-                pat_hv = data["hv_weekday"] if data["hv_weekday"] else all_hv
-
-            # MV: 50% pattern + 50% base
-            base_mv = sum(all_mv) / len(all_mv)
-            pattern_mv = sum(pat_mv) / len(pat_mv)
-            smart_mv = 0.5 * pattern_mv + 0.5 * base_mv
-            smart_mv = _round_mv(item_name, smart_mv)
-            # Clamp ke range pattern
-            if pat_mv:
-                smart_mv = max(min(pat_mv), min(max(pat_mv), smart_mv))
-                smart_mv = _round_mv(item_name, smart_mv)
-
-            # HV: PS → 2 desimal, lainnya integer
-            if "PS" in (item_name or "").upper():
-                base_hv = sum(all_hv) / len(all_hv)
-                pattern_hv = sum(pat_hv) / len(pat_hv)
-                smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
-                smart_hv = round(smart_hv, 2)
-                if pat_hv:
-                    smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
-                    smart_hv = round(smart_hv, 2)
-            else:
-                base_hv = sum(all_hv) / len(all_hv)
-                pattern_hv = sum(pat_hv) / len(pat_hv)
-                smart_hv = 0.5 * pattern_hv + 0.5 * base_hv
-                smart_hv = round(smart_hv)
-                if pat_hv:
-                    smart_hv = max(min(pat_hv), min(max(pat_hv), smart_hv))
-                smart_hv = int(smart_hv)
-
-            result[periode] = {
-                "mv_avg": smart_mv,
-                "mv_min": min(all_mv), "mv_max": max(all_mv),
-                "hv_avg": smart_hv,
-                "hv_min": min(all_hv), "hv_max": max(all_hv),
-                "samples": len(all_mv),
-                "pattern_type": "weekend" if is_target_weekend else "weekday",
-            }
-        else:
-            all_vals = data["all"]
-            if not all_vals:
-                continue
-            if is_target_weekend:
-                pat_vals = data["weekend"] if data["weekend"] else all_vals
-            else:
-                pat_vals = data["weekday"] if data["weekday"] else all_vals
-
-            base_avg = sum(all_vals) / len(all_vals)
-            pattern_avg = sum(pat_vals) / len(pat_vals)
-            smart_avg = 0.5 * pattern_avg + 0.5 * base_avg
-            suggested = round(smart_avg / 5) * 5
-            if pat_vals:
-                suggested = max(min(pat_vals), min(max(pat_vals), suggested))
-
-            result[periode] = {
-                "avg": int(suggested),
-                "raw_avg": round(smart_avg, 1),
-                "min": min(all_vals), "max": max(all_vals),
-                "samples": len(all_vals),
-                "pattern_type": "weekend" if is_target_weekend else "weekday",
-                "pattern_avg": round(pattern_avg, 1),
-                "pattern_samples": len(pat_vals),
-            }
-
-    # Fallback: kalau ada periode yang kosong (tidak ada histori), isi dengan rata-rata semua periode
-    if not result:
-        # Coba kumpulkan semua nilai dari semua periode
-        if data_type == "tegangan-trafo":
-            all_mvs = []
-            all_hvs = []
-            for pdata in pattern.values():
-                all_mvs.extend(pdata["mv_all"])
-                all_hvs.extend(pdata["hv_all"])
-            if all_mvs:
-                mv_fb = _round_mv(item_name, sum(all_mvs) / len(all_mvs))
-                mv_fb = max(min(all_mvs), min(max(all_mvs), mv_fb))
-                mv_fb = _round_mv(item_name, mv_fb)
-                if "PS" in (item_name or "").upper():
-                    hv_fb = round(sum(all_hvs) / len(all_hvs), 2)
-                else:
-                    hv_fb = int(round(sum(all_hvs) / len(all_hvs)))
-                result[-1] = {
-                    "mv_avg": mv_fb, "hv_avg": hv_fb,
-                    "samples": len(all_mvs), "fallback": True,
-                    "note": "Fallback: rata-rata semua periode (periode target kosong)",
-                }
-        else:
-            all_vals = []
-            for pdata in pattern.values():
-                all_vals.extend(pdata["all"])
-            if all_vals:
-                val_fb = round((sum(all_vals) / len(all_vals)) / 5) * 5
-                val_fb = int(max(min(all_vals), min(max(all_vals), val_fb)))
-                result[-1] = {
-                    "avg": val_fb,
-                    "raw_avg": round(sum(all_vals) / len(all_vals), 1),
-                    "min": min(all_vals), "max": max(all_vals),
-                    "samples": len(all_vals), "fallback": True,
-                    "note": "Fallback: rata-rata semua periode (periode target kosong)",
-                }
-
-    return result
-
 def _infer_data_type_from_path_web(path: str) -> str:
     if "tegangan" in path:
         return "tegangan-trafo"
@@ -673,34 +482,23 @@ def api_refresh():
     result = api_get(token, paths[data_type], {"garduIndukId": _get_gi_id(), "date": date_str})
     return jsonify(result.get("data", {}).get("items", []))
 
-@app.route("/api/data/pattern", methods=["GET"])
-@login_required
-def api_pattern():
-    """API untuk mendapatkan pola beban dari data historis."""
-    token = session["token"]
-    data_type = request.args.get("type")  # beban-penyulang, beban-trafo, tegangan-trafo
-    item_id = request.args.get("item_id", type=int)
-    days = request.args.get("days", 7, type=int)
-    
-    pattern = learn_pattern(token, _get_gi_id(), data_type, item_id, days)
-    return jsonify({"success": True, "pattern": pattern})
-
 @app.route("/api/data/batch-input", methods=["POST"])
 @login_required
 def api_batch_input():
-    """API untuk batch input — bisa per-item (multiple periods) atau per-periode (multiple items).
-    Support dry_run=true untuk preview tanpa submit (parity dengan CLI --dry-run).
-    """
+    """API batch satu periode untuk banyak item, dengan dukungan dry-run."""
     token = session["token"]
     data = request.get_json()
     
     data_type = data.get("type")
-    mode = data.get("mode", "per-item")  # "per-item" atau "per-periode"
+    mode = data.get("mode")
     date_str = data.get("date", datetime.now().strftime("%Y-%m-%d"))
     dry_run = data.get("dry_run", False)
     
     results = []
     
+    if mode != "per-periode":
+        return jsonify({"success": False, "message": "Hanya mode per-periode yang didukung"}), 400
+
     if mode == "per-periode":
         # Batch per periode: 1 jam, banyak item sekaligus
         items = data.get("items")  # list of {item_id, value, mv, hv}
@@ -770,66 +568,6 @@ def api_batch_input():
                 results.append({"item_id": item_id, "success": True, "id": result["data"].get("id")})
             else:
                 results.append({"item_id": item_id, "success": False, "message": result.get("message")})
-
-    else:
-        item_id = data.get("item_id")
-        item_name = data.get("item_name") or data.get("nama") or data.get("name")  # untuk resolver foto manual per-item
-        periods = data.get("periods")
-
-        if not periods or not isinstance(periods, list):
-            return jsonify({"success": False, "message": "Periods harus list"}), 400
-
-        for p in periods:
-            periodo = p.get("periode")
-
-            if data_type == "tegangan-trafo":
-                endpoint = "/gama/opgi-20kv/operator-gi/tegangan-trafo/input"
-                file_field = "files"
-                num_photos = 2
-                id_field = "trafoId"
-            elif data_type == "beban-trafo":
-                endpoint = "/gama/opgi-20kv/operator-gi/beban-trafo/input"
-                file_field = "file"
-                num_photos = 1
-                id_field = "trafoId"
-            else:
-                endpoint = "/gama/opgi-20kv/operator-gi/beban-penyulang/input"
-                file_field = "file"
-                num_photos = 1
-                id_field = "penyulangId"
-
-            if dry_run:
-                val_label = f"MV={p.get('mv')} HV={p.get('hv')}" if data_type == "tegangan-trafo" else f"{p.get('value')}A"
-                results.append({"periode": periodo, "success": True, "dry_run": True, "value": val_label})
-                continue
-
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
-            durasi = _h_durasi(data_type)
-            body_data = {
-                id_field: item_id,
-                "timezone": "Asia/Jakarta",
-                "periode": periodo,
-                "tanggal": dt.day,
-                "bulan": dt.month - 1,
-                "tahun": dt.year,
-                "durasi": durasi,
-            }
-
-            if data_type == "tegangan-trafo":
-                fotoHV, fotoMV = _h_foto_pair_dicts(date_str, periodo, durasi)
-                body_data["mv"] = p.get("mv")
-                body_data["hv"] = p.get("hv")
-                body_data["fotoHV"] = fotoHV
-                body_data["fotoMV"] = fotoMV
-            else:
-                body_data["beban"] = p.get("value")
-                body_data["foto"] = _h_foto_dict(date_str, periodo, durasi, data_type)
-
-            status, result = api_post_multipart(token, endpoint, body_data, DUMMY_JPEG, file_field, num_photos, item_name=item_name)
-            if result.get("success"):
-                results.append({"periode": periodo, "success": True, "id": result["data"].get("id")})
-            else:
-                results.append({"periode": periodo, "success": False, "message": result.get("message")})
 
     return jsonify({"success": True, "results": results, "dry_run": dry_run})
 
